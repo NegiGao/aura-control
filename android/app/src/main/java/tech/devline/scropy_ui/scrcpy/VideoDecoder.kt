@@ -1,0 +1,219 @@
+package tech.devline.scropy_ui.scrcpy
+
+import android.media.MediaCodec
+import android.media.MediaFormat
+import android.util.Log
+import android.view.Surface
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import tech.devline.scropy_ui.adb.AdbStream
+import java.io.DataInputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+
+private const val TAG = "VideoDecoder"
+
+/**
+ * Reads the scrcpy video stream from an [AdbStream] and decodes it
+ * with [MediaCodec], rendering output to a [Surface].
+ *
+ * The raw stream format (after the session handshake) is:
+ *   [pts_flags: int64 BE] [size: int32 BE] [data: <size> bytes]   (repeated)
+ *
+ * scrcpy 4.x: bit 63 = session-meta packet (12-byte header only, carries
+ * width/height, no payload — emitted again on rotation/resize), bit 62 = CONFIG,
+ * bit 61 = KEY_FRAME. [onResize] is invoked when a session packet updates the size.
+ */
+class VideoDecoder(
+    private val stream: AdbStream,
+    private val codecId: Int,
+    width: Int,
+    height: Int,
+    private val onResize: ((Int, Int) -> Unit)? = null,
+) {
+    @Volatile var isRunning = false
+        private set
+
+    @Volatile var framesDecoded = 0L
+        private set
+
+    @Volatile var framesReceived = 0L
+        private set
+
+    @Volatile var videoBytesReceived = 0L
+        private set
+
+    private var codec: MediaCodec? = null
+    private val codecLock = Object()
+    private var mimeType: String? = null
+    @Volatile private var currentWidth = width
+    @Volatile private var currentHeight = height
+
+    /** Cached config packet (SPS/PPS) to re-feed after codec restart. */
+    private var lastConfigData: ByteArray? = null
+
+    /**
+     * Start decoding and rendering to [surface].
+     * This suspends (blocks the IO dispatcher) until the stream closes or
+     * [stop] is called.
+     */
+    suspend fun start(surface: Surface) = withContext(Dispatchers.IO) {
+        try {
+            mimeType = when (codecId) {
+                ScrcpyProtocol.CODEC_H264 -> MediaFormat.MIMETYPE_VIDEO_AVC
+                ScrcpyProtocol.CODEC_H265 -> MediaFormat.MIMETYPE_VIDEO_HEVC
+                ScrcpyProtocol.CODEC_AV1  -> "video/av01"
+                else -> {
+                    throw IOException("Unsupported video codec 0x${codecId.toString(16)}")
+                }
+            }
+
+            synchronized(codecLock) { configureCodec(surface) }
+
+            isRunning = true
+            val dis = DataInputStream(stream.inputStream)
+
+            while (isRunning && !stream.isClosed()) {
+                val ptsFlags = dis.readLong()
+                val dataSize = dis.readInt()
+
+                // scrcpy 4.x session-meta packet: MSB set, no payload. The low 32
+                // bits of the header hold the width, the "size" field the height.
+                if ((ptsFlags and ScrcpyProtocol.FLAG_SESSION) != 0L) {
+                    val newW = (ptsFlags and 0xFFFFFFFFL).toInt()
+                    val newH = dataSize
+                    Log.d(TAG, "Session meta: ${newW}x${newH}")
+                    if (newW !in 1..16384 || newH !in 1..16384) throw IOException("Invalid video dimensions")
+                    currentWidth = newW
+                    currentHeight = newH
+                    onResize?.invoke(newW, newH)
+                    continue
+                }
+
+                if (dataSize <= 0 || dataSize > 4 * 1024 * 1024) {
+                    throw IOException("Invalid video packet size $dataSize")
+                }
+
+                val isConfig = (ptsFlags and ScrcpyProtocol.FLAG_CONFIG) != 0L
+                val pts      = if (isConfig) 0L else (ptsFlags and ScrcpyProtocol.PTS_MASK)
+                val data     = ByteArray(dataSize)
+                dis.readFully(data)
+
+                // Count complete video payloads only; config packets are bytes, not frames.
+                videoBytesReceived += dataSize
+                if (!isConfig) framesReceived++
+
+                if (isConfig) lastConfigData = data.clone()
+
+                synchronized(codecLock) {
+                    val mc = codec ?: return@synchronized // no codec → discard
+                    try {
+                        feedToCodec(mc, data, pts, isConfig)
+                        drainCodec(mc)
+                    } catch (e: IllegalStateException) {
+                        Log.w(TAG, "Codec error (surface destroyed?), releasing codec", e)
+                        releaseMediaResource({ mc.stop() }, { mc.release() })
+                        codec = null
+                        throw e
+                    }
+                }
+            }
+        } catch (_: IOException) {
+            // Stream closed normally
+        } catch (e: Exception) {
+            Log.e(TAG, "Video decode error", e)
+            throw e
+        } finally {
+            isRunning = false
+            synchronized(codecLock) {
+                codec?.let { releaseMediaResource({ it.stop() }, { it.release() }) }
+                codec = null
+            }
+        }
+    }
+
+    /** Release the codec (call before the surface is destroyed). */
+    fun releaseCodec() {
+        synchronized(codecLock) {
+            codec?.let { mc ->
+                Log.d(TAG, "Releasing codec")
+                releaseMediaResource({ mc.stop() }, { mc.release() })
+                codec = null
+            }
+        }
+    }
+
+    /** Reconfigure and start the codec with a new surface. */
+    fun restartCodec(surface: Surface) {
+        synchronized(codecLock) {
+            codec?.let { mc ->
+                releaseMediaResource({ mc.stop() }, { mc.release() })
+                codec = null
+            }
+            try {
+                configureCodec(surface)
+                // Re-feed cached config (SPS/PPS) so decoder is ready for next keyframe
+                lastConfigData?.let { cfg ->
+                    val mc = codec ?: return@let
+                    feedToCodec(mc, cfg, 0L, isConfig = true)
+                    Log.d(TAG, "Re-fed config packet (${cfg.size} bytes)")
+                }
+                Log.d(TAG, "Codec restarted with new surface")
+            } catch (e: Exception) {
+                releaseCodec()
+                throw e
+            }
+        }
+    }
+
+    fun stop() {
+        isRunning = false
+        runCatching { stream.close() }
+    }
+
+    // ─── Private helpers ─────────────────────────────────────────────────────
+
+    private fun configureCodec(surface: Surface) {
+        val mime = mimeType ?: return
+        val format = MediaFormat.createVideoFormat(mime, currentWidth, currentHeight)
+        val mc = MediaCodec.createDecoderByType(mime)
+        codec = mc
+        mc.configure(format, surface, null, 0)
+        mc.start()
+    }
+
+    private fun feedToCodec(mc: MediaCodec, data: ByteArray, pts: Long, isConfig: Boolean) {
+        // One 30 fps frame is ~33 ms apart. Five milliseconds was too short on
+        // Beam Pro's Qualcomm decoder and caused valid H.264 packets to be
+        // dropped during brief buffer recycling pauses.
+        val timeout = 50_000L   // µs
+        val idx     = mc.dequeueInputBuffer(timeout)
+        if (idx < 0) { Log.w(TAG, "No input buffer available"); return }
+
+        val buf = mc.getInputBuffer(idx) ?: return
+        buf.clear()
+        buf.put(data)
+
+        val flags = if (isConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
+        mc.queueInputBuffer(idx, 0, data.size, pts, flags)
+    }
+
+    private fun drainCodec(mc: MediaCodec) {
+        val info    = MediaCodec.BufferInfo()
+        val timeout = 0L   // non-blocking
+        while (true) {
+            val idx = mc.dequeueOutputBuffer(info, timeout)
+            when {
+                idx >= 0 -> {
+                    val render = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                    mc.releaseOutputBuffer(idx, render)
+                    if (render) framesDecoded++
+                }
+                idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    Log.d(TAG, "Output format: ${mc.outputFormat}")
+                }
+                else -> break
+            }
+        }
+    }
+}

@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Aura Control Public</string>
+    <string name="connect_title">Android 端末に接続</string>
+    <string name="host_hint">端末の IP アドレス（例：192.168.1.5）</string>
+    <string name="port_hint">ADB ポート（通常 5555）</string>
+    <string name="btn_connect">Wi-Fi で接続</string>
+    <string name="btn_usb">USB / OTG で接続</string>
+    <string name="status_connecting">接続中…</string>
+    <string name="status_pushing">投影サーバーを転送中…</string>
+    <string name="status_starting">投影サーバーを起動中…</string>
+    <string name="status_streaming">投影中</string>
+    <string name="error_no_server">投影サーバーが見つかりません。アプリを再インストールしてください。</string>
+    <string name="error_connection">接続に失敗しました：%1$s</string>
+    <string name="trust_prompt">接続先端末で「許可」を押してください。</string>
+</resources>

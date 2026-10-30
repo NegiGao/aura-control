@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aura Control Public</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f5f7;
+      --panel: #fff;
+      --panel-2: #f5f5f7;
+      --line: #d8d8dd;
+      --text: #1d1d1f;
+      --muted: #626268;
+      --focus: #0066cc;
+      --green: #176b3b;
+      --red: #c60000;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    }
+
+    button, select, input { font: inherit; }
+    button, select, input { color: var(--text); }
+    button { transition: background-color .16s ease-out, border-color .16s ease-out; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    button:active:not(:disabled) { filter: brightness(.94); }
+
+    .shell { width: min(1840px, calc(100% - 48px)); margin: 0 auto; padding: 24px 0 48px; }
+    .language-toolbar { display: flex; align-items: center; gap: 4px; }
+    .language-toolbar span { margin-right: 10px; color: var(--muted); }
+    .language-toolbar button { min-height: 44px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; }
+    .language-toolbar button:hover { background: #e8e8ed; }
+    .language-toolbar button[aria-pressed="true"] { border-color: var(--line); background: var(--panel); font-weight: 600; }
+
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+    header > div { min-width: 0; }
+    .brand { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+    .eyebrow { margin: 0; color: var(--muted); font-size: 12px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 650; line-height: 1.15; letter-spacing: -.035em; }
+
+    .header-status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; min-width: 0; }
+    .log { max-height: 44px; max-width: 360px; color: var(--muted); overflow-y: auto; font-size: 12px; overflow-wrap: anywhere; }
+    .log strong { color: var(--text); font-weight: 600; }
+    .connection { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+    .connection.connected .dot { background: var(--green); }
+
+    .discovery-tools { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 8px 0; margin-bottom: 8px; border-top: 1px solid var(--line); }
+    .discovery-tools label { display: flex; gap: 8px; align-items: center; min-height: 44px; }
+    .discovery-tools input { width: 20px; height: 20px; accent-color: var(--text); }
+    .discovery-status { color: var(--muted); font-size: 12px; }
+    .panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 20px; }
+    .unit { min-width: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+    .experience-timer { min-height: 130px; padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
+    .timer-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .timer-main label { display: grid; gap: 4px; margin-right: auto; color: var(--muted); font-size: 12px; }
+    .timer-value { color: var(--green); font: 650 28px/1.1 ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    .timer-value.last-minute { color: #805400; }
+    .timer-value.finished { color: #fff; background: var(--red); padding: 3px 7px; border-radius: 5px; }
+    .timer-button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; }
+    .timer-button:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .timer-stage { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; }
+    .stage-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .timer-stage .timer-value { flex-shrink: 0; margin-left: auto; font-size: 18px; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 20px 4px; }
+    .card-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 17px; font-weight: 600; }
+    .slot-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #fff; background: var(--text); font-size: 14px; font-weight: 600; }
+    .status { color: var(--muted); font-size: 12px; }
+    .status.running { color: var(--green); font-weight: 600; }
+    .settings { padding: 16px 20px 20px; }
+    .field { margin-bottom: 12px; min-width: 0; }
+    .caption { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 500; }
+
+    .device-options { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; max-height: 138px; padding: 3px; margin: -3px; overflow-y: auto; }
+    .device-option { min-width: 0; min-height: 62px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); text-align: left; cursor: pointer; }
+    .device-option:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .device-option.selected { border-color: var(--text); background: #eeeeF1; }
+    .device-option:focus-visible { outline-offset: -3px; }
+    .device-option strong, .device-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .device-option strong { font-size: 14px; font-weight: 600; }
+    .device-option small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .compact-controls { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+    .compact-controls .field { margin-bottom: 0; }
+    .compact-controls select { width: 116px; }
+    .audio-field select { width: 144px; }
+    .setting-note { margin: 5px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    select { width: 100%; min-width: 0; min-height: 44px; padding: 9px 28px 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 14px; }
+    .toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 12px 0; }
+    .toggle { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; cursor: pointer; }
+    .toggle span { font-size: 14px; }
+    .toggle input { appearance: none; flex-shrink: 0; width: 32px; height: 20px; margin: 0; border: 1px solid #a0a0a7; border-radius: 999px; background: #d8d8dd; cursor: pointer; }
+    .toggle input::after { content: ""; display: block; width: 14px; height: 14px; margin: 2px; border-radius: 50%; background: #fff; transition: transform .16s ease-out; }
+    .toggle input:checked { border-color: var(--text); background: var(--text); }
+    .toggle input:checked::after { transform: translateX(12px); }
+    .aura-volume-control { flex-basis: 100%; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 12px; min-width: 0; padding-top: 4px; }
+    .aura-volume-control > span { font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .level-buttons { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 5px; }
+    .level-button { min-width: 0; min-height: 44px; padding: 4px 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); font-size: 14px; font-weight: 600; cursor: pointer; }
+    .level-button:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .level-button.selected { border-color: var(--text); color: #fff; background: var(--text); }
+    .height-control { display: grid; gap: 8px; margin: 0 0 18px; }
+    .height-control > span { color: var(--muted); font-size: 12px; }
+
+    .actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 4px; }
+    .btn { min-height: 44px; padding: 8px 6px; border: 1px solid var(--text); border-radius: 8px; color: #fff; background: var(--text); font-size: 14px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; cursor: pointer; }
+    .btn:hover:not(:disabled) { background: #353538; }
+    .btn.stop, .btn.recordings { border-color: var(--line); color: var(--text); background: var(--panel); }
+    .btn.stop:hover:not(:disabled), .btn.recordings:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .recordings { width: 100%; }
+
+    .app-launcher { padding: 20px; border-top: 1px solid var(--line); }
+    .app-row { display: grid; grid-template-columns: repeat(4,minmax(60px,1fr)); gap: 4px; overflow-x: auto; padding: 4px; margin: -4px; }
+    .app-button { display: grid; place-items: center; align-content: center; gap: 4px; min-width: 0; height: 108px; padding: 6px 4px; border: 1px solid transparent; border-radius: 8px; background: var(--panel-2); font-size: 14px; font-weight: 500; line-height: 1.2; text-align: center; overflow-wrap: anywhere; cursor: pointer; }
+    .app-button img { width: 48px; height: 48px; border-radius: 7px; object-fit: contain; }
+    .app-button[data-app="youtube"] img { width: 56px; height: 56px; }
+    .app-label { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 100%; font-size: 12px; line-height: 1.25; }
+    .app-button:hover:not(:disabled) { border-color: #929298; background: #ededf0; }
+    .app-split { grid-column: span 2; grid-template-columns: repeat(2,minmax(0,1fr)); cursor: default; }
+    .app-heading { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 40px; }
+    .app-heading img { width: 40px; height: 40px; }
+    .maps-actions { grid-column: span 4; grid-template-columns: repeat(4,minmax(0,1fr)); }
+    .maps-actions .app-heading { min-height: 28px; }
+    .maps-actions .app-heading img { width: 28px; height: 28px; }
+    .app-button > button { border: 1px solid var(--line); border-radius: 6px; min-height: 44px; width: 100%; padding: 4px; background: var(--panel); font-size: 14px; cursor: pointer; }
+    .app-button > button:hover:not(:disabled) { border-color: #929298; background: #eeeeF1; }
+    .device-controls, .quick-destinations { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 4px; padding-top: 12px; }
+    .quick-destinations { grid-template-columns: minmax(0,180px); padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--line); }
+    .control-button { min-width: 0; min-height: 44px; padding: 6px 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 14px; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; cursor: pointer; }
+    .control-button:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .web-tools { display: grid; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .url-entry { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 6px; }
+    .url-input, .saved-sites { min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 14px; }
+    .url-input { width: 100%; padding: 9px 10px; }
+    .url-input::placeholder { color: var(--muted); }
+    .url-open, .url-save { min-width: 52px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 14px; font-weight: 500; cursor: pointer; }
+    .url-open:hover:not(:disabled), .url-save:hover:not(:disabled) { border-color: #929298; background: var(--panel-2); }
+    .saved-sites { padding: 9px 28px 9px 10px; }
+    button:disabled, .device-option.selected:disabled, .level-button.selected:disabled, .btn.stop:disabled, .btn.recordings:disabled { color: #616166; background: #ececef; border-color: #d8d8dd; cursor: not-allowed; }
+    .device-option:disabled small { color: #616166; }
+
+    #aura-connection-dialog { width: min(440px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 28px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: var(--panel); }
+    #aura-connection-dialog::backdrop { background: rgba(0,0,0,.36); }
+    #aura-connection-dialog h2 { margin: 0 0 16px; font-size: 22px; letter-spacing: -.02em; }
+    #aura-connection-dialog p { color: var(--muted); overflow-wrap: anywhere; }
+    #aura-connection-dialog button { width: 100%; min-height: 44px; margin-top: 12px; border: 1px solid var(--text); border-radius: 8px; color: #fff; background: var(--text); font-size: 14px; cursor: pointer; }
+
+    @media (max-width: 1280px) { .panels { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+    @media (max-width: 800px) {
+      .shell { width: calc(100% - 32px); padding-top: 16px; }
+      .panels { grid-template-columns: minmax(0,1fr); gap: 20px; }
+      header { flex-wrap: wrap; gap: 8px; }
+      .header-status { margin-left: 0; }
+      h1 { font-size: 22px; }
+      .language-toolbar { gap: 2px; flex-wrap: wrap; }
+      .language-toolbar span { margin-right: 6px; }
+      .language-toolbar button { padding-inline: 12px; }
+      .experience-timer { padding-inline: 16px; }
+      .card-head { padding-inline: 16px; }
+      .settings, .app-launcher { padding: 16px; }
+    }
+    @media (max-width: 420px) {
+      .aura-volume-control { grid-template-columns: minmax(0,1fr); gap: 6px; }
+      .toggles { column-gap: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <h1>Aura Control Public</h1>
+        <p class="eyebrow">SCRCPY 4.0 / 3 DEVICE / PUBLIC 1.0.0</p>
+      </div>
+      <nav class="language-toolbar" aria-label="言語">
+      <span>言語</span>
+      <button type="button" data-language="zh" aria-pressed="false" data-no-translate>中文</button>
+      <button type="button" data-language="en" aria-pressed="false" data-no-translate>English</button>
+      <button type="button" data-language="ja" aria-pressed="true" data-no-translate>日本語</button>
+      </nav>
+    </header>
+    <div class="discovery-tools">
+      <label><input id="auto-discovery" type="checkbox">Wi-Fi 自動検出</label>
+      <button id="scan-once" class="timer-button" type="button">一度だけ検索</button>
+      <span id="discovery-status" class="discovery-status" role="status">自動検出 OFF</span>
+      <div class="header-status">
+        <div class="log" id="log" aria-live="polite"><strong>準備完了</strong> — 3台のデバイスを個別に操作できます。</div>
+        <div class="connection" id="connection"><span class="dot" aria-hidden="true"></span><span id="connectionText">デバイスを確認中</span></div>
+      </div>
+    </div>
+    <section class="panels" id="panels" aria-label="3台の投影コントロール"></section>
+  </main>
+
+  <script src="ui_languages.js"></script>
+  <script src="i18n.js"></script>
+  <script src="experience_timers.js"></script>
+  <script>
+    const appItems = [["calendar","Google Calendar",""],["chrome","Chrome",""],["docs","Google Docs",""],["drive","Google Drive",""],["gemini","Gemini",""],["gmail","Gmail",""],["google-maps","Google Maps",""],["photos","Google Photos",""],["sheets","Google Sheets",""],["slides","Google Slides",""],["youtube","YouTube",""]];
+    const shortAppLabels = {};
+    const controlItems = [['back','戻る'], ['show-launcher','ランチャー']];
+    const volumeLevels = [0, 4, 8, 12, 15];
+    let savedTimers = {};
+    try { savedTimers = JSON.parse(localStorage.getItem('auraPublicTimers') || '{}'); } catch (_) {}
+    const experienceTimers = new AuraExperience.Timers(savedTimers);
+    const persistTimers = () => localStorage.setItem('auraPublicTimers', JSON.stringify(experienceTimers));
+    const slots = ['1', '2', '3'];
+    const oldTarget = localStorage.getItem('auraPublicTarget');
+    const selectedTargets = Object.fromEntries(slots.map(slot => [slot, localStorage.getItem(`auraPublicTarget${slot}`) || (slot === '1' && oldTarget !== 'auto' ? oldTarget : '')]));
+    const selectedPhysical = Object.fromEntries(slots.map(slot => [slot, localStorage.getItem(`auraPublicPhysical${slot}`) || '']));
+    let knownDevices = [];
+    const notifiedWireless = new Set();
+    const connectionDialog = document.createElement('dialog');
+    connectionDialog.id = 'aura-connection-dialog';
+    connectionDialog.setAttribute('aria-labelledby', 'connection-dialog-title');
+    connectionDialog.innerHTML = '<h2 id="connection-dialog-title">Wi-Fi 接続完了</h2><p class="details"></p><p>USBケーブルを取り外して、投影を開始できます。</p><button type="button">確認</button>';
+    connectionDialog.querySelector('button').onclick = () => connectionDialog.close();
+    document.body.append(connectionDialog);
+    const appButton = (id,label) => `<button class="app-button" type="button" data-app="${id}" aria-label="${label}"><span class="app-label">${label}</span></button>`;
+
+    const levelButtons = action => `<div class="level-buttons">${volumeLevels.map(value => `<button class="level-button${value === 0 ? ' selected' : ''}" type="button" data-tune="${action}" data-value="${value}" aria-label="${action} ${value}/15">${value}</button>`).join('')}</div>`;
+    const panelHtml = slot => `
+      <article class="unit" data-slot="${slot}">
+        <section class="experience-timer" aria-label="体験タイマー">
+          <div class="timer-main"><label>体験 残り<span class="timer-value session-value" role="timer">15:00</span></label><button class="timer-button" type="button" data-timer="start">開始</button><button class="timer-button" type="button" data-timer="reset">リセット</button></div>
+          <div class="timer-stage" hidden><span class="stage-name"></span><span class="timer-value stage-value" role="timer"></span></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title"><span class="slot-mark">${slot}</span>投影設定</h2><span class="status">停止中</span></div>
+          <div class="settings">
+            <div class="field"><span class="caption">デバイス／接続</span><div class="device-options" aria-label="投影${slot}のデバイス"></div></div>
+            <div class="compact-controls wireless-settings">
+              <div class="field"><label class="caption" for="resolution-${slot}">解像度</label><select id="resolution-${slot}" data-field="resolution"><option value="1280">低 · 800p</option><option value="1600">中 · 1000p</option><option value="1920">高 · 1200p</option></select></div>
+              <div class="field"><label class="caption" for="frame-rate-${slot}">フレームレート</label><select id="frame-rate-${slot}" data-field="frameRate"><option value="30">30fps</option><option value="60">60fps</option></select></div>
+              <div class="field audio-field"><label class="caption" for="audio-${slot}">音声</label><select id="audio-${slot}" data-field="audio"><option value="no-audio">🎧</option><option value="playback">💻 再生</option><option value="output">💻 出力</option><option value="both">🎧＋💻</option></select></div>
+            </div>
+            <div class="usb-settings" hidden>
+              <label class="caption" for="usb-level-${slot}">USB 等級</label><select id="usb-level-${slot}" data-field="usbLevel"><option value="highest">最高（自動設定）</option></select>
+              <p class="setting-note">端末の元解像度・60fps上限・映像20Mbps・音声256kbps。発熱と消費電力は増加します。</p>
+              <p class="setting-note usb-audio-note">🎧＋💻（PC音声は同時に1台のみ）</p>
+            </div>
+            <p class="setting-note wireless-note">解像度はAURA（16:10）の目安。録画ON時は元解像度・60fps上限・20Mbpsで取得します。発熱・通信量が増加します。</p>
+            <p class="setting-note">録画：MP4 / H.264。端末から取得したフレームレートのまま保存します（60fps上限）。停止後の変換はありません。</p>
+            <div class="toggles">
+              <label class="toggle"><span>前面</span><input data-field="alwaysTop" type="checkbox" checked></label>
+              <label class="toggle" title="MP4 / H.264・元解像度・60fps上限。停止すると録画フォルダに直接保存します。"><span>録画 MP4</span><input data-field="record" type="checkbox"></label>
+              <label class="toggle"><span>マウス</span><input data-field="mouse" type="checkbox"></label>
+              <div class="aura-volume-control" aria-label="AURAのメディア音量"><span>AURA 🔊</span>${levelButtons('media-volume')}</div>
+            </div>
+            <div class="actions"><button class="btn start" type="button">投影を開始</button><button class="btn stop" type="button">停止</button><button class="btn recordings" type="button" title="録画フォルダを開く" aria-label="録画フォルダを開く">録画フォルダ</button></div>
+          </div>
+        </section>
+        <section class="app-launcher" aria-label="投影${slot}のアプリ操作">
+          <div class="app-row"><button class="app-button" type="button" data-action="close-all"><span class="app-label">全APPを閉じる</span></button>${appItems.map(item => appButton(...item)).join('')}</div>
+          <div class="device-controls">${controlItems.map(([id,label]) => `<button class="control-button" type="button" data-action="${id}">${label}</button>`).join('')}</div>
+          <div class="web-tools">
+            <div class="url-entry"><input class="url-input" data-field="url" type="url" inputmode="url" placeholder="URLを入力" aria-label="投影${slot}で開くURL"><button class="url-open" type="button">開く</button><button class="url-save" type="button">保存</button></div>
+            <select class="saved-sites" data-field="savedSite" aria-label="投影${slot}の保存サイト"><option value="">保存サイトを選択して開く</option></select>
+          </div>
+        </section>
+      </article>`;
+
+    document.querySelector('#panels').innerHTML = slots.map(panelHtml).join('');
+    slots.forEach(slot => {
+      const panel = document.querySelector(`[data-slot="${slot}"]`);
+      panel.querySelector('[data-field="audio"]').value = slot === '1' ? 'both' : 'no-audio';
+    });
+
+    const log = document.querySelector('#log');
+    const connection = document.querySelector('#connection');
+    const connectionText = document.querySelector('#connectionText');
+    const setLog = (title, message) => { const strong = document.createElement('strong'); strong.textContent = title; log.replaceChildren(strong, document.createTextNode(message ? ` — ${message}` : '')); AuraI18n.localize(log); };
+    let savedSites = [];
+    try { savedSites = JSON.parse(localStorage.getItem('auraPublicSavedSitesV1') || '[]').filter(item => typeof item === 'string'); }
+    catch (_) {}
+
+    async function request(path, body = {}) {
+      const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '操作に失敗しました。');
+      return data;
+    }
+
+    function normalizedUrl(value) {
+      const raw = value.trim();
+      if (!raw) throw new Error('URLを入力してください。');
+      const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('http または https のURLを入力してください。');
+      return url.href;
+    }
+
+    function renderSavedSites() {
+      document.querySelectorAll('[data-field="savedSite"]').forEach(select => {
+        const options = savedSites.map(url => new Option(`${new URL(url).hostname} — ${url}`, url));
+        select.replaceChildren(new Option('保存サイトを選択して開く', ''), ...options);
+        AuraI18n.localize(select);
+      });
+    }
+
+    async function openWebsite(slot, value) {
+      const url = normalizedUrl(value);
+      const result = await appRequest(slot, '/api/open-url', {url}, 'chrome');
+      setLog('Webサイト', `${slot} / ${result.url}`);
+    }
+
+    renderSavedSites();
+
+    const appBusy = new Set();
+    const appRevisions = new Map();
+    function renderAppBusy() {
+      slots.forEach(slot => {
+        document.querySelector(`[data-slot="${slot}"]`).querySelectorAll('[data-app],[data-tune^="gemini-"],[data-action="close-all"],.url-open,.saved-sites').forEach(control => { control.disabled = appBusy.has(selectedPhysical[slot]); });
+      });
+    }
+    async function appRequest(slot, path, body, app, closed = false) {
+      const target = targetFor(slot);
+      const identity = selectedPhysical[slot];
+      if (!identity) throw new Error('この枠のデバイスを選択してください。');
+      if (appBusy.has(identity)) throw new Error('操作中です。');
+      appBusy.add(identity);
+      appRevisions.set(identity, (appRevisions.get(identity) || 0) + 1);
+      renderAppBusy();
+      try {
+        const result = await request(path, {...body, target});
+        if (closed) experienceTimers.closed(identity, app);
+        else experienceTimers.launched(identity, app);
+        persistTimers();
+        renderTimers();
+        return result;
+      } finally { appBusy.delete(identity); renderAppBusy(); }
+    }
+    let presencePolling = false;
+    async function checkAppPresence() {
+      if (presencePolling) return;
+      presencePolling = true;
+      try {
+        await Promise.all(slots.map(async slot => {
+          const identity = selectedPhysical[slot];
+          const stage = experienceTimers.get(identity).stage;
+          if (!stage || appBusy.has(identity) || !selectedTargets[slot]) return;
+          const revision = appRevisions.get(identity) || 0;
+          try {
+            const result = await request('/api/app-presence', {target:selectedTargets[slot], physical_serial:identity, app:stage.app});
+            if (result.present === false && result.physical_serial === identity && selectedPhysical[slot] === identity && experienceTimers.get(identity).stage === stage && !appBusy.has(identity) && (appRevisions.get(identity) || 0) === revision) {
+              experienceTimers.closed(identity); persistTimers(); renderTimers();
+            }
+          } catch (_) { /* A timeout or disconnected device is not an app-close event. */ }
+        }));
+      } finally { presencePolling = false; }
+    }
+    function renderTimers() {
+      const now = Date.now();
+      slots.forEach(slot => {
+        const panel = document.querySelector(`[data-slot="${slot}"]`);
+        const identity = selectedPhysical[slot];
+        const timer = experienceTimers.get(identity);
+        const total = panel.querySelector('.session-value');
+        total.textContent = AuraExperience.format(timer.sessionDeadline === null ? AuraExperience.SESSION_MS : AuraExperience.remaining(timer.sessionDeadline, now));
+        total.className = `timer-value session-value ${AuraExperience.phase(timer.sessionDeadline, now)}`;
+        panel.querySelector('[data-timer="start"]').disabled = !identity || timer.sessionDeadline !== null;
+        panel.querySelector('[data-timer="reset"]').disabled = !identity;
+        panel.querySelector('.timer-stage').hidden = !timer.stage;
+        if (timer.stage) {
+          panel.querySelector('.stage-name').textContent = AuraI18n.translate(timer.stage.app === 'chrome' ? 'Chrome' : appItems.find(([id]) => id === timer.stage.app)?.[1] || timer.stage.app);
+          const value = panel.querySelector('.stage-value');
+          value.textContent = AuraExperience.format(AuraExperience.remaining(timer.stage.deadline, now));
+          value.className = `timer-value stage-value ${AuraExperience.phase(timer.stage.deadline, now, 15000)}`;
+        }
+      });
+    }
+
+    function saveSelection(slot, device) {
+      selectedTargets[slot] = device?.serial || '';
+      selectedPhysical[slot] = device?.physical_serial || '';
+      localStorage.setItem(`auraPublicTarget${slot}`, selectedTargets[slot]);
+      localStorage.setItem(`auraPublicPhysical${slot}`, selectedPhysical[slot]);
+      renderTimers();
+    }
+
+    function assignDevices(devices) {
+      const bySerial = new Map(devices.map(device => [device.serial, device]));
+      const claimed = new Set();
+      slots.forEach(slot => {
+        let device = bySerial.get(selectedTargets[slot]);
+        if (!device && selectedPhysical[slot]) {
+          const same = devices.filter(item => item.physical_serial === selectedPhysical[slot]);
+          device = same.find(item => item.transport === 'wireless') || same[0];
+        }
+        if (!device || claimed.has(device.physical_serial)) saveSelection(slot, null);
+        else { saveSelection(slot, device); claimed.add(device.physical_serial); }
+      });
+      slots.forEach(slot => {
+        if (selectedTargets[slot]) return;
+        const physicals = [...new Set(devices.map(device => device.physical_serial))];
+        const physical = physicals.find(value => !claimed.has(value));
+        if (!physical) return;
+        const same = devices.filter(device => device.physical_serial === physical);
+        const device = same.find(item => item.transport === 'wireless') || same[0];
+        saveSelection(slot, device);
+        claimed.add(physical);
+      });
+    }
+
+    function renderDeviceOptions() {
+      slots.forEach(slot => {
+        const panel = document.querySelector(`[data-slot="${slot}"]`);
+        const container = panel.querySelector('.device-options');
+        const usedElsewhere = new Set(slots.filter(other => other !== slot).map(other => selectedPhysical[other]).filter(Boolean));
+        const none = document.createElement('button');
+        none.type = 'button';
+        none.className = `device-option${selectedTargets[slot] ? '' : ' selected'}`;
+        none.innerHTML = '<strong>未選択</strong><small>デバイス待機中</small>';
+        none.addEventListener('click', () => { saveSelection(slot, null); renderDeviceOptions(); });
+        const buttons = knownDevices.map(device => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `device-option${selectedTargets[slot] === device.serial ? ' selected' : ''}`;
+          button.disabled = usedElsewhere.has(device.physical_serial);
+          const transportLabel = document.createElement('strong');
+          transportLabel.textContent = device.transport === 'usb' ? 'USB' : 'Wi-Fi';
+          const deviceLabel = document.createElement('small');
+          deviceLabel.textContent = `${device.physical_serial} · ${device.serial}`;
+          button.replaceChildren(transportLabel, deviceLabel);
+          button.addEventListener('click', () => { saveSelection(slot, device); renderDeviceOptions(); });
+          return button;
+        });
+        container.replaceChildren(none, ...buttons);
+        const isUsb = knownDevices.some(device => device.serial === selectedTargets[slot] && device.transport === 'usb');
+        panel.querySelector('.wireless-settings').hidden = isUsb;
+        panel.querySelector('.wireless-note').hidden = isUsb;
+        panel.querySelector('.usb-settings').hidden = !isUsb;
+        AuraI18n.localize(panel);
+      });
+    }
+
+    async function updateDevices() {
+      try {
+        const response = await fetch('/api/devices');
+        const data = await response.json();
+        knownDevices = data.devices || [];
+        assignDevices(knownDevices);
+        renderDeviceOptions();
+        const count = new Set(knownDevices.map(device => device.physical_serial)).size;
+        connection.classList.toggle('connected', count > 0);
+        connectionText.textContent = `接続デバイス：${count}台 / 3枠`;
+        AuraI18n.localize(connectionText);
+      } catch (_) {
+        connection.classList.remove('connected');
+        connectionText.textContent = '制御サービス未接続';
+        AuraI18n.localize(connectionText);
+      }
+    }
+
+    async function updateStatus() {
+      try {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        if (data.discovery) renderDiscovery(data.discovery);
+        let pcAudioOwner = '';
+        const fresh = (data.verified_wireless || []).filter(item => !notifiedWireless.has(item.serial + '/' + item.address));
+        if (fresh.length && !connectionDialog.open) {
+          connectionDialog.querySelector('.details').textContent = fresh.map(item => `${item.serial} — ${item.address}`).join('\n');
+          fresh.forEach(item => notifiedWireless.add(item.serial + '/' + item.address));
+          connectionDialog.showModal();
+        }
+        slots.forEach(slot => {
+          const stream = data.streams[slot];
+          const panel = document.querySelector(`[data-slot="${slot}"]`);
+          const status = panel.querySelector('.status');
+          status.textContent = stream.running ? `${stream.active_connection === 'wireless' ? 'Wi-Fi' : 'USB'}実行中` : '停止中';
+          status.classList.toggle('running', stream.running);
+          if (stream.running && stream.audio !== 'no-audio') pcAudioOwner = slot;
+        });
+        slots.forEach(slot => {
+          const panel = document.querySelector(`[data-slot="${slot}"]`);
+          const select = panel.querySelector('[data-field="audio"]');
+          [...select.options].forEach(option => { option.disabled = Boolean(pcAudioOwner && pcAudioOwner !== slot && option.value !== 'no-audio'); });
+          if (pcAudioOwner && pcAudioOwner !== slot && select.value !== 'no-audio') select.value = 'no-audio';
+          panel.querySelector('.usb-audio-note').textContent = pcAudioOwner && pcAudioOwner !== slot
+            ? '🎧 AURAのみ（PC音声は別の投影で使用中）'
+            : '🎧＋💻（PC音声は同時に1台のみ）';
+        });
+      } catch (_) {}
+      AuraI18n.localize(document.querySelector('#panels'));
+    }
+
+    function targetFor(slot) {
+      if (!selectedTargets[slot]) throw new Error('この枠のデバイスを選択してください。');
+      return selectedTargets[slot];
+    }
+
+    function renderDiscovery(state) {
+      document.querySelector('#auto-discovery').checked = state.automatic;
+      document.querySelector('#scan-once').disabled = state.running || state.pending;
+      document.querySelector('#discovery-status').textContent = AuraI18n.translate(state.running || state.pending ? '検索中…' : state.automatic ? '自動検出 ON' : '自動検出 OFF');
+    }
+    document.querySelector('#auto-discovery').addEventListener('change', async event => {
+      try { renderDiscovery(await request('/api/discovery', {automatic:event.target.checked})); }
+      catch (error) { event.target.checked = !event.target.checked; setLog('失敗', ''); }
+    });
+    document.querySelector('#scan-once').addEventListener('click', async event => {
+      event.target.disabled = true;
+      try { renderDiscovery(await request('/api/discovery', {once:true})); }
+      catch (error) { event.target.disabled = false; setLog('失敗', ''); }
+    });
+
+    document.querySelector('#panels').addEventListener('click', async event => {
+      const panel = event.target.closest('.unit');
+      if (!panel) return;
+      const slot = panel.dataset.slot;
+      const button = event.target.closest('button');
+      if (!button || button.classList.contains('device-option')) return;
+      button.disabled = true;
+      try {
+        if (button.dataset.timer) {
+          const identity = selectedPhysical[slot];
+          if (!identity) throw new Error('この枠のデバイスを選択してください。');
+          if (button.dataset.timer === 'start') experienceTimers.start(identity);
+          else experienceTimers.reset(identity);
+          persistTimers();
+          renderTimers();
+        } else if (button.classList.contains('start')) {
+          setLog('起動中', `投影 ${slot}`);
+          const result = await request('/api/start', {
+            slot, target: targetFor(slot),
+            language: AuraI18n.language,
+            resolution: panel.querySelector('[data-field="resolution"]').value,
+            frame_rate: panel.querySelector('[data-field="frameRate"]').value,
+            audio: panel.querySelector('[data-field="audio"]').value,
+            always_top: panel.querySelector('[data-field="alwaysTop"]').checked,
+            record: panel.querySelector('[data-field="record"]').checked,
+            mouse: panel.querySelector('[data-field="mouse"]').checked
+          });
+          if (result.audio_adjusted) panel.querySelector('[data-field="audio"]').value = 'no-audio';
+          setLog('投影開始', `${slot} / ${result.serial}${result.audio_adjusted ? ' / PC音声は別の投影で使用中' : ''}`);
+        } else if (button.classList.contains('recordings')) {
+          const result = await request('/api/open-recordings');
+          setLog('録画フォルダ', result.path);
+        } else if (button.dataset.tune) {
+          const action = button.dataset.tune;
+          const value = button.dataset.value ?? panel.querySelector(`[data-tune-value="${action}"]`)?.value;
+          const result = action.startsWith('gemini-')
+            ? await appRequest(slot, '/api/tune', {action, value}, 'gemini', action === 'gemini-off')
+            : await request('/api/tune', {target:targetFor(slot), action, value});
+          if (button.dataset.value !== undefined) panel.querySelectorAll(`[data-tune="${action}"]`).forEach(item => item.classList.toggle('selected', item.dataset.value === String(value)));
+          setLog('OK', '');
+        } else if (button.classList.contains('url-open')) {
+          await openWebsite(slot, panel.querySelector('[data-field="url"]').value);
+        } else if (button.classList.contains('url-save')) {
+          const url = normalizedUrl(panel.querySelector('[data-field="url"]').value);
+          savedSites = [url, ...savedSites.filter(item => item !== url)].slice(0, 30);
+          localStorage.setItem('auraPublicSavedSitesV1', JSON.stringify(savedSites));
+          renderSavedSites();
+          setLog('保存しました', url);
+        } else if (button.classList.contains('stop')) {
+          await request('/api/stop', {slot});
+          setLog('停止', `投影 ${slot}`);
+        } else if (button.dataset.app) {
+          await appRequest(slot, '/api/launch', {app:button.dataset.app}, button.dataset.app);
+          setLog('OK', '');
+        } else if (button.dataset.destination) { throw new Error('Unsupported action'); } else if (button.dataset.action) {
+          const tracked = ['close-all'].includes(button.dataset.action);
+          if (tracked) await appRequest(slot, '/api/control', {action:button.dataset.action}, null, button.dataset.action === 'close-all');
+          else await request('/api/control', {target:targetFor(slot), action:button.dataset.action});
+          setLog('OK', '');
+        }
+        await updateStatus();
+      } catch (error) {
+        console.error(error);
+        setLog('失敗', button.classList.contains('recordings') ? error.message : '');
+      } finally { button.disabled = false; renderTimers(); renderAppBusy(); }
+    });
+
+    document.querySelector('#panels').addEventListener('change', async event => {
+      const savedSite = event.target.closest('[data-field="savedSite"]');
+      if (!savedSite) return;
+      const slot = savedSite.closest('.unit').dataset.slot;
+      try {
+        if (savedSite.value) {
+          await openWebsite(slot, savedSite.value);
+          savedSite.value = '';
+        }
+      } catch (error) { setLog('エラー', error.message); }
+    });
+
+    document.querySelector('#panels').addEventListener('keydown', async event => {
+      const input = event.target.closest('[data-field="url"]');
+      if (!input || event.key !== 'Enter') return;
+      event.preventDefault();
+      try { await openWebsite(input.closest('.unit').dataset.slot, input.value); }
+      catch (error) { setLog('エラー', error.message); }
+    });
+
+    AuraI18n.bind();
+    renderTimers();
+    updateDevices();
+    updateStatus();
+    setInterval(updateDevices, 3000);
+    setInterval(updateStatus, 2000);
+    setInterval(checkAppPresence, 5000);
+    setInterval(renderTimers, 250);
+  </script>
+</body>
+</html>
