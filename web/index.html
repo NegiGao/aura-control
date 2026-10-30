@@ -120,7 +120,7 @@
     .recordings { width: 100%; }
 
     .app-launcher { padding: 20px; border-top: 1px solid var(--line); }
-    .app-row { display: grid; grid-template-columns: repeat(4,minmax(60px,1fr)); gap: 4px; overflow-x: auto; padding: 4px; margin: -4px; }
+    .app-row { display: grid; grid-template-columns: repeat(7,minmax(60px,1fr)); gap: 4px; overflow-x: auto; padding: 4px; margin: -4px; }
     .app-button { display: grid; place-items: center; align-content: center; gap: 4px; min-width: 0; height: 108px; padding: 6px 4px; border: 1px solid transparent; border-radius: 8px; background: var(--panel-2); font-size: 14px; font-weight: 500; line-height: 1.2; text-align: center; overflow-wrap: anywhere; cursor: pointer; }
     .app-button img { width: 48px; height: 48px; border-radius: 7px; object-fit: contain; }
     .app-button[data-app="youtube"] img { width: 56px; height: 56px; }
@@ -181,7 +181,7 @@
     <header>
       <div class="brand">
         <h1>Aura Control Public</h1>
-        <p class="eyebrow">SCRCPY 4.0 / 3 DEVICE / PUBLIC 1.0.0</p>
+        <p class="eyebrow">SCRCPY 4.0 / 3 DEVICE / V3.12.4 / PUBLIC 0.49</p>
       </div>
       <nav class="language-toolbar" aria-label="言語">
       <span>言語</span>
@@ -206,10 +206,23 @@
   <script src="i18n.js"></script>
   <script src="experience_timers.js"></script>
   <script>
-    const appItems = [["calendar","Google Calendar",""],["chrome","Chrome",""],["docs","Google Docs",""],["drive","Google Drive",""],["gemini","Gemini",""],["gmail","Gmail",""],["google-maps","Google Maps",""],["photos","Google Photos",""],["sheets","Google Sheets",""],["slides","Google Slides",""],["youtube","YouTube",""]];
-    const shortAppLabels = {};
-    const controlItems = [['back','戻る'], ['show-launcher','ランチャー']];
+    const appItems = [
+      ['youtube', 'YouTube XR', 'icons/youtube.png'],
+      ['google-maps', 'Google Maps 2D', 'icons/google-maps.png'],
+      ['maps-xr', 'Maps XR', 'icons/google-maps.png'],
+      ['gemini', 'Gemini', ''],
+    ];
+    const shortAppLabels = {youtube: 'YouTube', 'google-maps': 'Maps 2D'};
+    const controlItems = [
+      ['back', '戻る'],
+      ['show-launcher', 'ランチャー'],
+      ['arrange', 'アプリを整列'],
+      ['recenter', '中心をリセット'],
+      ['open-workset', 'Gmail・Docs・YouTube・フォト・Maps 2D']
+    ];
     const volumeLevels = [0, 4, 8, 12, 15];
+    const mapDestinations = [['tokyo-tower', '東京タワー'], ['takeshiba', '竹芝ポートシティ'], ['skytree', '東京スカイツリー']];
+    const quickDestinations = [['official', 'XREAL 日本公式']];
     let savedTimers = {};
     try { savedTimers = JSON.parse(localStorage.getItem('auraPublicTimers') || '{}'); } catch (_) {}
     const experienceTimers = new AuraExperience.Timers(savedTimers);
@@ -226,7 +239,11 @@
     connectionDialog.innerHTML = '<h2 id="connection-dialog-title">Wi-Fi 接続完了</h2><p class="details"></p><p>USBケーブルを取り外して、投影を開始できます。</p><button type="button">確認</button>';
     connectionDialog.querySelector('button').onclick = () => connectionDialog.close();
     document.body.append(connectionDialog);
-    const appButton = (id,label) => `<button class="app-button" type="button" data-app="${id}" aria-label="${label}"><span class="app-label">${label}</span></button>`;
+    const appButton = (id,label,icon) => {
+      if (id === 'gemini') return '<div class="app-button app-split"><span class="app-heading">Gemini</span><button type="button" data-tune="gemini-xr-on">起動</button><button type="button" data-tune="gemini-xr-off">終了</button></div>';
+      if (id === 'maps-xr') return `<div class="app-button app-split maps-actions"><span class="app-heading"><img src="${icon}" alt=""><span>Maps XR</span></span><button type="button" data-app="maps-new">初回ガイド</button>${mapDestinations.map(([destination,name]) => `<button type="button" data-destination="${destination}">${name}</button>`).join('')}</div>`;
+      return `<button class="app-button" type="button" data-app="${id}" title="${label}" aria-label="${label}">${icon ? `<img src="${icon}" alt="">` : ''}<span class="app-label">${shortAppLabels[id] || label}</span></button>`;
+    };
 
     const levelButtons = action => `<div class="level-buttons">${volumeLevels.map(value => `<button class="level-button${value === 0 ? ' selected' : ''}" type="button" data-tune="${action}" data-value="${value}" aria-label="${action} ${value}/15">${value}</button>`).join('')}</div>`;
     const panelHtml = slot => `
@@ -257,12 +274,14 @@
               <label class="toggle"><span>マウス</span><input data-field="mouse" type="checkbox"></label>
               <div class="aura-volume-control" aria-label="AURAのメディア音量"><span>AURA 🔊</span>${levelButtons('media-volume')}</div>
             </div>
+            <div class="height-control"><span>調光（0＝全透・4＝全黒）</span><div class="level-buttons">${[0,1,2,3,4].map(value => `<button class="level-button" type="button" data-tune="dimming" data-value="${value}">${value}段</button>`).join('')}</div></div>
             <div class="actions"><button class="btn start" type="button">投影を開始</button><button class="btn stop" type="button">停止</button><button class="btn recordings" type="button" title="録画フォルダを開く" aria-label="録画フォルダを開く">録画フォルダ</button></div>
           </div>
         </section>
         <section class="app-launcher" aria-label="投影${slot}のアプリ操作">
           <div class="app-row"><button class="app-button" type="button" data-action="close-all"><span class="app-label">全APPを閉じる</span></button>${appItems.map(item => appButton(...item)).join('')}</div>
           <div class="device-controls">${controlItems.map(([id,label]) => `<button class="control-button" type="button" data-action="${id}">${label}</button>`).join('')}</div>
+          <div class="quick-destinations">${quickDestinations.map(([id,label]) => `<button class="control-button" type="button" data-destination="${id}">${label}</button>`).join('')}</div>
           <div class="web-tools">
             <div class="url-entry"><input class="url-input" data-field="url" type="url" inputmode="url" placeholder="URLを入力" aria-label="投影${slot}で開くURL"><button class="url-open" type="button">開く</button><button class="url-save" type="button">保存</button></div>
             <select class="saved-sites" data-field="savedSite" aria-label="投影${slot}の保存サイト"><option value="">保存サイトを選択して開く</option></select>
@@ -319,7 +338,7 @@
     const appRevisions = new Map();
     function renderAppBusy() {
       slots.forEach(slot => {
-        document.querySelector(`[data-slot="${slot}"]`).querySelectorAll('[data-app],[data-tune^="gemini-"],[data-action="close-all"],.url-open,.saved-sites').forEach(control => { control.disabled = appBusy.has(selectedPhysical[slot]); });
+        document.querySelector(`[data-slot="${slot}"]`).querySelectorAll('[data-app],[data-destination],[data-tune^="gemini-xr-"],[data-action="close-all"],[data-action="open-workset"],.url-open,.saved-sites').forEach(control => { control.disabled = appBusy.has(selectedPhysical[slot]); });
       });
     }
     async function appRequest(slot, path, body, app, closed = false) {
@@ -426,11 +445,11 @@
           button.type = 'button';
           button.className = `device-option${selectedTargets[slot] === device.serial ? ' selected' : ''}`;
           button.disabled = usedElsewhere.has(device.physical_serial);
-          const transportLabel = document.createElement('strong');
-          transportLabel.textContent = device.transport === 'usb' ? 'USB' : 'Wi-Fi';
-          const deviceLabel = document.createElement('small');
-          deviceLabel.textContent = `${device.physical_serial} · ${device.serial}`;
-          button.replaceChildren(transportLabel, deviceLabel);
+          const title = document.createElement('strong');
+          title.textContent = device.transport === 'usb' ? 'USB' : 'Wi-Fi';
+          const detail = document.createElement('small');
+          detail.textContent = `${device.physical_serial} · ${device.serial}`;
+          button.replaceChildren(title, detail);
           button.addEventListener('click', () => { saveSelection(slot, device); renderDeviceOptions(); });
           return button;
         });
@@ -549,8 +568,8 @@
         } else if (button.dataset.tune) {
           const action = button.dataset.tune;
           const value = button.dataset.value ?? panel.querySelector(`[data-tune-value="${action}"]`)?.value;
-          const result = action.startsWith('gemini-')
-            ? await appRequest(slot, '/api/tune', {action, value}, 'gemini', action === 'gemini-off')
+          const result = action.startsWith('gemini-xr-')
+            ? await appRequest(slot, '/api/tune', {action, value}, 'gemini', action === 'gemini-xr-off')
             : await request('/api/tune', {target:targetFor(slot), action, value});
           if (button.dataset.value !== undefined) panel.querySelectorAll(`[data-tune="${action}"]`).forEach(item => item.classList.toggle('selected', item.dataset.value === String(value)));
           setLog('OK', '');
@@ -568,9 +587,12 @@
         } else if (button.dataset.app) {
           await appRequest(slot, '/api/launch', {app:button.dataset.app}, button.dataset.app);
           setLog('OK', '');
-        } else if (button.dataset.destination) { throw new Error('Unsupported action'); } else if (button.dataset.action) {
-          const tracked = ['close-all'].includes(button.dataset.action);
-          if (tracked) await appRequest(slot, '/api/control', {action:button.dataset.action}, null, button.dataset.action === 'close-all');
+        } else if (button.dataset.destination) {
+          await appRequest(slot, '/api/destination', {destination:button.dataset.destination}, button.dataset.destination === 'official' ? 'chrome' : 'maps-xr');
+          setLog('OK', '');
+        } else if (button.dataset.action) {
+          const tracked = ['close-all', 'open-workset'].includes(button.dataset.action);
+          if (tracked) await appRequest(slot, '/api/control', {action:button.dataset.action}, button.dataset.action === 'open-workset' ? 'youtube' : null, button.dataset.action === 'close-all');
           else await request('/api/control', {target:targetFor(slot), action:button.dataset.action});
           setLog('OK', '');
         }

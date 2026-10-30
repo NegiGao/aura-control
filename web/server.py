@@ -37,8 +37,23 @@ wireless_error = ""
 verified_wireless = {}
 wireless_bootstrap_attempts = set()
 
-APPS = {"calendar": "com.google.android.calendar","chrome": "com.android.chrome","docs": "com.google.android.apps.docs.editors.docs","drive": "com.google.android.apps.docs","gemini": "com.google.android.apps.bard","gmail": "com.google.android.gm","google-maps": "com.google.android.apps.maps","photos": "com.google.android.apps.photos","sheets": "com.google.android.apps.docs.editors.sheets","slides": "com.google.android.apps.docs.editors.slides","youtube": "com.google.android.youtube"}
-GEMINI_PACKAGE = "com.google.android.apps.bard"
+APPS = {
+    "maps-xr": "com.google.android.apps.immersiveviewxr/.ImmersiveViewXrActivity",
+    "maps-new": "com.google.android.apps.immersiveviewxr/.ImmersiveViewXrActivity",
+    "google-maps": "com.google.android.apps.maps/com.google.android.maps.MapsActivity",
+    "chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
+    "youtube": "com.google.android.apps.youtube.xr/com.google.android.apps.youtube.vr.activities.YouTubeVrPanel2Activity",
+}
+
+GROUP_APPS = [
+    ["-n", "com.google.android.gm/.ConversationListActivityGmail"],
+    ["-n", "com.google.android.apps.docs.editors.docs/com.google.android.apps.docs.app.NewMainProxyActivity"],
+    ["-n", APPS["youtube"]],
+    ["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", "com.google.android.apps.photos"],
+    ["-n", APPS["google-maps"]],
+]
+DESTINATIONS = {"tokyo-tower": "東京タワー", "takeshiba": "東京ポートシティ竹芝", "skytree": "東京スカイツリー"}
+GEMINI_PACKAGE = "com.google.android.googlequicksearchbox"
 
 
 def adb_devices():
@@ -322,7 +337,17 @@ def launch_app(options):
     serial = resolve_target(str(options.get("target", "auto")))
     if not serial:
         raise RuntimeError("接続可能なデバイスが見つかりません。")
-    command = [str(ADB), "-s", serial, "shell", "am", "start", "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", APPS[app_id]]
+    if app_id in {"maps-xr", "maps-new"}:
+        import shlex
+        value = 0 if app_id == "maps-new" else 1
+        script = 'p=/data/user/0/com.google.android.apps.immersiveviewxr/shared_prefs/com.google.android.apps.immersiveviewxr.v2.playerprefs.xml; if test -f "$p"; then cp -p "$p" "$p.aura-guide-backup" && sed -i -E '\
+            + shlex.quote('/name="(Locomotion|StreetView|Walkabout)OnboardingCompleted"/s/value="[0-9]+"/value="' + str(value) + '"/') + ' "$p"; fi'
+        preparation = subprocess.run([str(ADB), "-s", serial, "shell", "am force-stop com.google.android.apps.immersiveviewxr; su 0 sh -c " + shlex.quote(script)], capture_output=True, text=True, timeout=10)
+        if preparation.returncode:
+            raise RuntimeError(preparation.stderr or "Maps XR の設定に失敗しました。")
+    command = [str(ADB), "-s", serial, "shell", "am", "start", "-W", "-n", APPS[app_id]]
+    if app_id == "maps-xr" and options.get("place") in DESTINATIONS.values():
+        command += ["-a", "android.intent.action.VIEW", "-d", "geo:0,0?q=" + quote(options["place"])]
     result = subprocess.run(
         command,
         capture_output=True, text=True, timeout=15,
@@ -369,6 +394,15 @@ def app_presence(options):
     return {"physical_serial": expected, "present": package in packages if valid else None}
 
 
+def open_destination(options):
+    destination = options.get("destination")
+    if destination == "official":
+        return open_url({"target": options.get("target", "auto"), "url": "https://www.xreal.com/jp/aura"})[0]
+    if destination not in DESTINATIONS:
+        raise ValueError("場所が正しくありません。")
+    return launch_app({"target": options.get("target", "auto"), "app": "maps-xr", "place": DESTINATIONS[destination]})
+
+
 def open_url(options):
     url = str(options.get("url", "")).strip()
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
@@ -398,7 +432,7 @@ def tune_device(options):
         "notification-volume": ("通知音量", "5"),
         "ai-volume": ("AI音量", "11"),
     }
-    allowed = {*volume_streams, "gemini-on", "gemini-off"}
+    allowed = {*volume_streams, "dimming", "headset-height", "full-dim", "no-dim", "passthrough-on", "immersive-on", "gemini-xr-on", "gemini-xr-off"}
     if action not in allowed:
         raise ValueError("調整項目が正しくありません。")
     serial = resolve_target(str(options.get("target", "auto")))
@@ -414,14 +448,14 @@ def tune_device(options):
             raise ValueError("音量は0〜15で入力してください。")
         label, stream = volume_streams[action]
         result = subprocess.run(
-            [str(ADB), "-s", serial, "shell", "cmd", "media_session", "volume", "--stream", stream, "--set", str(value)],
+            [str(ADB), "-s", serial, "shell", "su", "0", "cmd", "media_session", "volume", "--stream", stream, "--set", str(value)],
             capture_output=True, text=True, timeout=5,
         )
         output = f"{result.stdout}\n{result.stderr}".strip()
         if result.returncode or "Error" in output or "Exception" in output:
             raise RuntimeError(output or f"{label}を設定できません。")
         current = subprocess.run(
-            [str(ADB), "-s", serial, "shell", "cmd", "media_session", "volume", "--stream", stream, "--get"],
+            [str(ADB), "-s", serial, "shell", "su", "0", "cmd", "media_session", "volume", "--stream", stream, "--get"],
             capture_output=True, text=True, timeout=5,
         )
         match = re.search(r"(?:volume is|volume:)\s*(\d+)", f"{current.stdout}\n{current.stderr}", re.I)
@@ -431,12 +465,45 @@ def tune_device(options):
             raise RuntimeError(f"{label}を設定できませんでした（現在 {match.group(1)}/15）。")
         return serial, f"{label}：{value}"
 
-    command = (["am", "force-stop", GEMINI_PACKAGE] if action == "gemini-off" else
-               ["am", "start", "-W", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", GEMINI_PACKAGE])
-    result = subprocess.run([str(ADB), "-s", serial, "shell", *command], capture_output=True, text=True, timeout=15, check=True)
+    if action == "dimming":
+        value = int(options.get("value", -1))
+        if value not in range(5):
+            raise ValueError("調光は0〜4段階です。")
+        alpha = ("1.0", "0.7", "0.5", "0.3", "0.1")[value]
+        result = subprocess.run([str(ADB), "-s", serial, "shell", "su", "0", "am", "broadcast", "-a", "com.android.systemui.xr.SET_PASSTHROUGH_DIMMING_ALPHA", "-p", "com.android.systemui", "--ef", "com.android.systemui.xr.PASSTHROUGH_OPACITY", alpha], capture_output=True, text=True, timeout=10)
+        output = result.stdout + result.stderr
+        if result.returncode or re.search(r"error|exception|failed", output, re.I):
+            raise RuntimeError(output or "調光に失敗しました。")
+        return serial, "OK"
+
+    if action == "headset-height":
+        try:
+            value = float(options.get("value"))
+        except (TypeError, ValueError):
+            raise ValueError("高さは1.0〜2.0mで入力してください。")
+        if not 1.0 <= value <= 2.0:
+            raise ValueError("高さは1.0〜2.0mで入力してください。")
+        subprocess.run(
+            [str(ADB), "-s", serial, "shell", "su", "0", "surfaceflinger", f"--set-height-above-floor={value:.2f}"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        return serial, f"眼鏡の高さ：{value:.2f}m"
+
+    commands = {
+        "full-dim": (["su", "0", "am", "broadcast", "-a", "com.android.systemui.xr.SET_PASSTHROUGH_DIMMING_ALPHA", "-p", "com.android.systemui", "--ef", "com.android.systemui.xr.PASSTHROUGH_OPACITY", "1.0"], "Full Dim を有効にしました。"),
+        "no-dim": (["su", "0", "am", "broadcast", "-a", "com.android.systemui.xr.SET_PASSTHROUGH_DIMMING_ALPHA", "-p", "com.android.systemui", "--ef", "com.android.systemui.xr.PASSTHROUGH_OPACITY", "0.1"], "No Dim を有効にしました。"),
+        "passthrough-on": (["su", "0", "am", "broadcast", "-a", "ix.moohan.sysui.TOGGLE_PASSTHROUGH", "--es", "enable", "true"], "Passthrough ON にしました。"),
+        "immersive-on": (["su", "0", "am", "broadcast", "-a", "ix.moohan.sysui.TOGGLE_PASSTHROUGH", "--es", "enable", "false"], "Immersive ON にしました。"),
+        "gemini-xr-on": (["su", "0", "am", "start", "-n", "com.google.android.googlequicksearchbox/com.google.android.apps.search.assistant.surfaces.voice.robin.xr.main.XrModeActivity", "-f", "0x10000000"], "Gemini XR を起動しました。"),
+        "gemini-xr-off": (["am", "force-stop", "com.google.android.googlequicksearchbox"], "Gemini XR を停止しました。"),
+    }
+    command, message = commands[action]
+    result = subprocess.run([str(ADB), "-s", serial, "shell", *command], capture_output=True, text=True, timeout=10, check=True)
     if re.search(r"error|exception|failed", result.stdout + result.stderr, re.I):
         raise RuntimeError("操作に失敗しました。")
-    return serial, "OK"
+    if action == "gemini-xr-on":
+        confirm_app_task(serial, GEMINI_PACKAGE)
+    return serial, message
 
 
 def quarter_screen_size():
@@ -476,7 +543,7 @@ def current_task(serial):
 
 def control_device(options):
     action = str(options.get("action", ""))
-    allowed = {"close-all", "back", "show-launcher"}
+    allowed = {"close-current", "close-all", "back", "show-launcher", "open-workset", "arrange", "recenter"}
     if action not in allowed:
         raise ValueError("操作が正しくありません。")
     serial = resolve_target(str(options.get("target", "auto")))
@@ -486,12 +553,46 @@ def control_device(options):
     if action == "back":
         subprocess.run([str(ADB), "-s", serial, "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=5)
         return serial, "戻りました。"
-    if action == "show-launcher":
-        subprocess.run([str(ADB), "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME"], timeout=5, check=True)
+    if action in {"arrange", "recenter"}:
+        shortcut = "TIDY_UP_PANELS" if action == "arrange" else "RECENTER"
+        subprocess.run([str(ADB), "-s", serial, "shell", "su", "0", "am", "broadcast", "-a", "ix.moohan.sysui.KEYBOARD_SHORTCUT", "--es", "SHORTCUT", shortcut], capture_output=True, text=True, timeout=5, check=True)
         return serial, "OK"
-    for package in APPS.values():
-        subprocess.run([str(ADB), "-s", serial, "shell", "am", "force-stop", package], capture_output=True, text=True, timeout=5, check=True)
-    return serial, "OK"
+    if action == "show-launcher":
+        subprocess.run(
+            [str(ADB), "-s", serial, "shell", "su", "0", "am", "broadcast", "-a", "SYSTEM_INTENT_ACTION_LAUNCHER"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        return serial, "Launcherを表示しました。"
+    if action == "open-workset":
+        for launch_args in GROUP_APPS:
+            result = subprocess.run([str(ADB), "-s", serial, "shell", "am", "start", "-W", *launch_args], capture_output=True, text=True, timeout=15, check=True)
+            output = f"{result.stdout}\n{result.stderr}".strip()
+            if "Error:" in output or "Exception" in output:
+                raise RuntimeError(output or "アプリを起動できません。")
+            confirm_app_task(serial, launch_args[-1].split("/", 1)[0])
+        return serial, "OK"
+    if action == "close-all":
+        result = subprocess.run(
+            [str(ADB), "-s", serial, "shell", "am", "stack", "list"],
+            capture_output=True, text=True, timeout=8, check=True,
+        )
+        stacks = result.stdout
+        if re.search(r"error|exception|failed", stacks + result.stderr, re.I):
+            raise RuntimeError("アプリを閉じられませんでした。")
+        packages = sorted(set(re.findall(r"taskId=\d+:\s+([\w.]+)/", stacks)) - {"com.android.systemui"})
+        for package in packages:
+            closed = subprocess.run([str(ADB), "-s", serial, "shell", "am", "stop-app", "--user", "current", package], capture_output=True, text=True, timeout=5, check=True)
+            if re.search(r"error|exception|failed", closed.stdout + closed.stderr, re.I):
+                raise RuntimeError("アプリを閉じられませんでした。")
+        return serial, f"{len(packages)} 個のアプリを閉じました。"
+
+    task = current_task(serial)
+    if not task or task[1] == "com.android.systemui":
+        raise RuntimeError("操作できるアプリウィンドウがありません。")
+    task_id, package, mode = task
+    if action == "close-current":
+        subprocess.run([str(ADB), "-s", serial, "shell", "am", "stop-app", "--user", "current", package], timeout=5, check=True)
+        return serial, f"{package} を閉じました。"
 
 
 def internal_display_id(serial):
@@ -637,7 +738,7 @@ def start_scrcpy(options):
         try:
             process = subprocess.Popen(
                 command,
-                cwd=ROOT,
+            cwd=ROOT,
                 env=projection_env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -751,6 +852,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"success": True, "path": open_recordings()})
             elif self.path == "/api/launch":
                 self.send_json(200, {"success": True, "serial": launch_app(data)})
+            elif self.path == "/api/destination":
+                self.send_json(200, {"success": True, "serial": open_destination(data)})
             elif self.path == "/api/app-presence":
                 self.send_json(200, app_presence(data))
             elif self.path == "/api/discovery":

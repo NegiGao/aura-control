@@ -5,7 +5,7 @@ import subprocess
 
 root = pathlib.Path(__file__).resolve().parents[1]
 files = subprocess.check_output(['git','ls-files','-z'],cwd=root).decode().split('\0')
-forbidden = re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|/Users/gaotianfu|xreal\.feishu\.cn|com\.Gugenka|com\.resolutiongames|com\.magicbean|com\.brink|V1L[0-9A-Z]{8,}|L1X[0-9A-Z]{8,}')
+forbidden = re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|/Users/[^/\s]+/|xreal\.feishu\.cn|com\.Gugenka|com\.resolutiongames|com\.magicbean|com\.brink|V1L[0-9A-Z]{8,}|L1X[0-9A-Z]{8,}')
 issues = []
 for name in filter(None, files):
     p = pathlib.PurePosixPath(name)

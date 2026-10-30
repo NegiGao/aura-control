@@ -25,3 +25,5 @@ This matches the official release asset digest checked during preparation. Apach
 The Gradle wrapper belongs to the Gradle project and is distributed under Apache-2.0: https://github.com/gradle/gradle . AndroidX, Kotlin and other build dependencies retain their own licenses and are resolved through the build configuration, not copied from a private dependency cache.
 
 No Google application APKs, proprietary XR demos, game assets, developer signing keys, ADB keys or internal operational documents are distributed in this repository.
+
+The Maps and YouTube shortcut icons identify their respective Google applications. They remain the property of their respective trademark/copyright owners; the project license does not grant rights to those marks, and no endorsement is implied.

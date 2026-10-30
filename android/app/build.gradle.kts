@@ -23,8 +23,8 @@ android {
         applicationId = "dev.negigao.auracontrol.publicapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-public"
+        versionCode = 2
+        versionName = "0.49-public"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -31,12 +31,15 @@ const { chromium } = require(process.env.AURA_PLAYWRIGHT || 'playwright');
   try {
     await page.goto('http://aura.test');
     const panel = page.locator('[data-slot="1"]');
-    await panel.locator('[data-app="photos"]').waitFor({state:'visible'});
-    assert.equal(await panel.locator('[data-app]').count(), 11);
-    assert.equal(await panel.locator('[data-destination]').count(), 0);
+    await panel.locator('[data-app="youtube"]').waitFor({state:'visible'});
+    assert.deepEqual(await panel.locator('[data-app]').evaluateAll(nodes => nodes.map(n=>n.dataset.app)), ['youtube','google-maps','maps-new']);
+    assert.equal(await panel.locator('[data-destination]').count(), 4);
+    assert.equal(await panel.locator('[data-tune="gemini-xr-off"]').count(), 1);
+    assert.equal(await panel.locator('[data-action="arrange"]').count(), 1);
+    assert.equal(await panel.locator('[data-action="recenter"]').count(), 1);
     assert.equal(await panel.locator('[data-field="savedSite"] option').count(), 1);
-    await panel.locator('[data-app="photos"]').click();
-    assert(calls.some(x=>x.path==='/api/launch' && x.body.app==='photos' && x.body.target==='TEST-USB'));
+    await panel.locator('[data-app="youtube"]').click();
+    assert(calls.some(x=>x.path==='/api/launch' && x.body.app==='youtube' && x.body.target==='TEST-USB'));
     await panel.locator('[data-field="url"]').fill('example.org');
     await panel.locator('.url-save').click();
     assert.equal(await panel.locator('[data-field="savedSite"] option').count(), 2);
@@ -54,6 +57,6 @@ const { chromium } = require(process.env.AURA_PLAYWRIGHT || 'playwright');
     await page.reload();
     assert.equal(await page.locator('[data-slot="1"] [data-field="savedSite"] option').count(), 2);
     assert.deepEqual(errors, []);
-    console.log('PASS: 11 Google 2D shortcuts, selected-device routing, empty first-run bookmarks, preserved old storage, save/open/reload, 3 languages and responsive layout');
+    console.log('PASS: v0.49 Google XR shortcuts and controls, third-party launchers removed, selected-device routing, empty first-run bookmarks, preserved old storage, save/open/reload, 3 languages and responsive layout');
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exit(1);});

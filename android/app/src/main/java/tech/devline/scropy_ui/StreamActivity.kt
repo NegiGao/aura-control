@@ -642,7 +642,7 @@ class StreamActivity : ComponentActivity() {
                     if (adbConn !== connection || !isConnected.value) return@run
                     val output = withContext(Dispatchers.IO) {
                         connection.readCommand("shell:($command); result=\$?; echo __AURA_RESULT__\$result",
-                            timeoutMs = 8_000L)
+                            timeoutMs = if (command == AuraCommands.controls.last().command) 30_000L else 8_000L)
                     }
                     var succeeded = output.lineSequence().lastOrNull() == "__AURA_RESULT__0" &&
                         !Regex("(?im)(error|exception|permission denial|failed|not found)").containsMatchIn(output)
@@ -873,6 +873,14 @@ internal fun BeamProControllerScreen(
                         }
                     }
                 }
+                SectionTitle("透光度")
+                Row(Modifier.fillMaxWidth()) {
+                    AuraCommands.transparencyLabels.forEachIndexed { value, label ->
+                        ControlButton(label, Modifier.weight(1f)) {
+                            onCommand("透光度", AuraCommands.transparency(value))
+                        }
+                    }
+                }
                 AuraCommands.modes.chunked(2).forEach { row ->
                     Row(Modifier.fillMaxWidth()) {
                         row.forEach { action ->
@@ -880,6 +888,8 @@ internal fun BeamProControllerScreen(
                         }
                     }
                 }
+                SectionTitle("ショートカット")
+                QuickDestinationButtons(onCommand)
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth()) {
                     ControlButton(if (controlOnly) "操作パネル（投影停止中）" else "投影を停止・操作のみ", Modifier.weight(1f), onPanelMode)
@@ -1041,6 +1051,16 @@ internal fun LocalBeamProStreamScreen(
                                             }
                                         }
                                     }
+                                    SectionTitle("透光度")
+                                    AuraCommands.transparencyLabels.withIndex().toList().chunked(levelColumns).forEach { row ->
+                                        Row(Modifier.fillMaxWidth()) {
+                                            row.forEach { (value, label) ->
+                                                ControlButton(label, Modifier.weight(1f)) {
+                                                    onCommand("透光度", AuraCommands.transparency(value))
+                                                }
+                                            }
+                                        }
+                                    }
                                     AuraCommands.modes.chunked(2).forEach { row ->
                                         Row(Modifier.fillMaxWidth()) {
                                             row.forEach { action ->
@@ -1048,6 +1068,8 @@ internal fun LocalBeamProStreamScreen(
                                             }
                                         }
                                     }
+                                    SectionTitle("ショートカット")
+                                    QuickDestinationButtons(onCommand)
                                     Row(Modifier.fillMaxWidth()) {
                                         ControlButton("投影を停止・操作のみ", Modifier.weight(1f), onPanelMode)
                                         ControlButton("投影・操作を終了", Modifier.weight(1f), onDisconnect)
@@ -1066,8 +1088,32 @@ internal fun LocalBeamProStreamScreen(
 
 @Composable
 internal fun AppPanelButtons(onCommand: (String, String) -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        AuraCommands.apps.chunked(2).forEach { row ->
+    Column(Modifier.fillMaxWidth().testTag("app-panel-actions")) {
+        Row(Modifier.fillMaxWidth()) {
+            AuraCommands.appPanelActions.take(2).forEach { action ->
+                AppControlButton(action, Modifier.weight(1f), onCommand)
+            }
+        }
+        Surface(modifier = Modifier.fillMaxWidth().padding(2.dp).testTag("maps-xr-group"),
+            shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant) {
+            Column {
+                Text("Maps XR", Modifier.padding(start = 8.dp, top = 4.dp),
+                    style = MaterialTheme.typography.labelSmall)
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    AuraCommands.appPanelActions.subList(2, 5).forEachIndexed { index, action ->
+                        if (index > 0) VerticalDivider(Modifier.fillMaxHeight())
+                        TextButton(onClick = { onCommand(action.label, action.command) },
+                            modifier = Modifier.weight(1f).sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+                            contentPadding = PaddingValues(2.dp)) {
+                            Text(action.label, style = MaterialTheme.typography.labelSmall,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                    }
+                }
+            }
+        }
+        AuraCommands.appPanelActions.drop(5).chunked(2).forEach { row ->
             Row(Modifier.fillMaxWidth()) {
                 row.forEach { action -> AppControlButton(action, Modifier.weight(1f), onCommand) }
                 if (row.size == 1) Spacer(Modifier.weight(1f))

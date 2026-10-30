@@ -137,6 +137,10 @@ globalThis.AuraLanguageCatalog = {
       "AURA 媒体音量",
       "AURA media volume"
     ],
+    "調光（0＝全透・4＝全黒）": [
+      "调光（0＝最透、4＝全黑）",
+      "Dimming (0 = clear, 4 = dark)"
+    ],
     "投影を開始": [
       "开始投屏",
       "Start casting"
@@ -176,6 +180,18 @@ globalThis.AuraLanguageCatalog = {
     "全APPを閉じる": [
       "关闭全部 APP",
       "Close all apps"
+    ],
+    "Gmail・ドキュメント・YouTube": [
+      "Gmail・文档・YouTube",
+      "Gmail · Docs · YouTube"
+    ],
+    "Gmail・Docs・YouTube": [
+      "Gmail・文档・YouTube",
+      "Gmail · Docs · YouTube"
+    ],
+    "Gmail・Docs・YouTube・フォト・Maps 2D": [
+      "Gmail・文档・YouTube・相册・Maps 2D",
+      "Gmail · Docs · YouTube · Photos · Maps 2D"
     ],
     "URLを入力": [
       "输入网址",
@@ -653,6 +669,10 @@ globalThis.AuraLanguageCatalog = {
       "AURA 音量",
       "AURA volume"
     ],
+    "透光度": [
+      "透光度",
+      "Transparency"
+    ],
     "ショートカット": [
       "快捷入口",
       "Shortcuts"
@@ -685,6 +705,14 @@ globalThis.AuraLanguageCatalog = {
       "Gemini 关",
       "Gemini OFF"
     ],
+    "Maps XR 起動": [
+      "启动 Maps XR",
+      "Launch Maps XR"
+    ],
+    "初回ガイド": [
+      "新手指导",
+      "Map New"
+    ],
     "開始前・15分": [
       "未开始・15 分钟",
       "Not started · 15 minutes"
@@ -705,6 +733,14 @@ globalThis.AuraLanguageCatalog = {
       "XREAL\n官网",
       "XREAL\nwebsite"
     ],
+    "東京\nタワー": [
+      "东京\n塔",
+      "Tokyo\nTower"
+    ],
+    "竹芝\nポート": [
+      "竹芝\n港城",
+      "Takeshiba\nPort City"
+    ],
     "未設定\n4": [
       "待设置\n4",
       "Not set\n4"
@@ -712,6 +748,26 @@ globalThis.AuraLanguageCatalog = {
     "未設定\n5": [
       "待设置\n5",
       "Not set\n5"
+    ],
+    "XREAL 日本公式": [
+      "XREAL 日本官网",
+      "XREAL Japan website"
+    ],
+    "東京タワー": [
+      "东京塔",
+      "Tokyo Tower"
+    ],
+    "竹芝ポートシティ": [
+      "竹芝港城",
+      "Tokyo Port City Takeshiba"
+    ],
+    "東京スカイツリー": [
+      "东京晴空塔",
+      "Tokyo Skytree"
+    ],
+    "スカイ\nツリー": [
+      "东京\n晴空塔",
+      "Tokyo\nSkytree"
     ],
     "体験タイマー": [
       "体验计时器",
@@ -752,6 +808,14 @@ globalThis.AuraLanguageCatalog = {
     "アプリを閉じられませんでした。": [
       "无法关闭应用。",
       "Could not close the app."
+    ],
+    "0 全透": [
+      "0 最透",
+      "0 Clear"
+    ],
+    "4 全黒": [
+      "4 全黑",
+      "4 Dark"
     ],
     "受信 — fps / 映像 — Mbps": [
       "接收 — fps / 视频 — Mbps",

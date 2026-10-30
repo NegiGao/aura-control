@@ -1,8 +1,8 @@
 (function (root) {
   'use strict';
   const SESSION_MS = 15 * 60 * 1000;
-  const budgets = Object.freeze({"calendar":120,"chrome":120,"docs":120,"drive":120,"gemini":120,"gmail":120,"google-maps":120,"photos":120,"sheets":120,"slides":120,"youtube":120});
-  const appId = value => value;
+  const budgets = Object.freeze({youtube:120, 'google-maps':30, 'maps-xr':150, gemini:60, chrome:60});
+  const appId = value => value === 'maps-new' ? 'maps-xr' : value;
   const fresh = () => ({sessionDeadline:null, stage:null});
   function remaining(deadline, now = Date.now()) { return Math.max(0, deadline - now); }
   function phase(deadline, now = Date.now(), warningMs = 60000) {

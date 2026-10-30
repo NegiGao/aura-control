@@ -12,13 +12,24 @@ internal data class AppCountdown(val app: ExperienceApp, val deadline: Long) {
     }
 }
 
-// Optional, uniform app timer; no prescribed demo order or per-app schedule.
-internal val experienceApps = AuraCommands.packages.map { (label, packageName) -> ExperienceApp(label, packageName, 120) }
+internal val experienceApps = listOf(
+    ExperienceApp("YouTube XR", "com.google.android.apps.youtube.xr", 120),
+    ExperienceApp("Google Maps 2D", "com.google.android.apps.maps", 30),
+    ExperienceApp("Google Maps XR", "com.google.android.apps.immersiveviewxr", 150),
+    ExperienceApp("Gemini", "com.google.android.googlequicksearchbox", 60),
+    ExperienceApp("Chrome", "com.android.chrome", 60),
+)
 
 internal fun experienceAppForCommand(command: String): ExperienceApp? {
     val label = AuraCommands.apps.firstOrNull { it.command == command }?.label
     if (label != null) return experienceApps.first { it.label == label }
-    return null
+    return when {
+        command == AuraCommands.mapsXrGuide || AuraCommands.quickDestinations.drop(1).any { it.command == command } ->
+            experienceApps.first { it.label == "Google Maps XR" }
+        command == AuraCommands.quickDestinations.first().command -> experienceApps.last()
+        command == AuraCommands.controls.last().command -> experienceApps.first()
+        else -> null
+    }
 }
 
 internal fun hasAppTask(tasks: String, app: ExperienceApp): Boolean =
