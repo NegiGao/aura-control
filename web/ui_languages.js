@@ -33,6 +33,10 @@ globalThis.AuraLanguageCatalog = {
       "未投屏",
       "Stopped"
     ],
+    "投影を再接続中": [
+      "正在恢复投屏",
+      "Reconnecting cast"
+    ],
     "デバイス／接続": [
       "设备／连接",
       "Device / connection"

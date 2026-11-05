@@ -181,7 +181,7 @@
     <header>
       <div class="brand">
         <h1>Aura Control Public</h1>
-        <p class="eyebrow">SCRCPY 4.0 / 3 DEVICE / V3.12.4 / PUBLIC 0.49</p>
+        <p class="eyebrow">SCRCPY 4.0 / 3 DEVICE / V3.12.8 / PUBLIC 0.49</p>
       </div>
       <nav class="language-toolbar" aria-label="言語">
       <span>言語</span>
@@ -202,9 +202,9 @@
     <section class="panels" id="panels" aria-label="3台の投影コントロール"></section>
   </main>
 
-  <script src="ui_languages.js"></script>
-  <script src="i18n.js"></script>
-  <script src="experience_timers.js"></script>
+  <script src="ui_languages.js?v=3.12.8"></script>
+  <script src="i18n.js?v=3.12.8"></script>
+  <script src="experience_timers.js?v=3.12.8"></script>
   <script>
     const appItems = [
       ['youtube', 'YouTube XR', 'icons/youtube.png'],
@@ -227,11 +227,18 @@
     try { savedTimers = JSON.parse(localStorage.getItem('auraPublicTimers') || '{}'); } catch (_) {}
     const experienceTimers = new AuraExperience.Timers(savedTimers);
     const persistTimers = () => localStorage.setItem('auraPublicTimers', JSON.stringify(experienceTimers));
+    const pageVersion = document.querySelector('.eyebrow').textContent.split(' / V').pop().split(' / ')[0];
+    let pendingActions = 0;
+    let checkingVersion = false;
     const slots = ['1', '2', '3'];
     const oldTarget = localStorage.getItem('auraPublicTarget');
     const selectedTargets = Object.fromEntries(slots.map(slot => [slot, localStorage.getItem(`auraPublicTarget${slot}`) || (slot === '1' && oldTarget !== 'auto' ? oldTarget : '')]));
     const selectedPhysical = Object.fromEntries(slots.map(slot => [slot, localStorage.getItem(`auraPublicPhysical${slot}`) || '']));
+    const manualTransport = new Set();
     let knownDevices = [];
+    let reportedStreams;
+    let statusRequest = 0;
+    let appliedStatus = 0;
     const notifiedWireless = new Set();
     const connectionDialog = document.createElement('dialog');
     connectionDialog.id = 'aura-connection-dialog';
@@ -253,7 +260,7 @@
           <div class="timer-stage" hidden><span class="stage-name"></span><span class="timer-value stage-value" role="timer"></span></div>
         </section>
         <section class="card">
-          <div class="card-head"><h2 class="card-title"><span class="slot-mark">${slot}</span>投影設定</h2><span class="status">停止中</span></div>
+          <div class="card-head"><h2 class="card-title"><span class="slot-mark">${slot}</span>投影設定</h2><span class="status" role="status">停止中</span></div>
           <div class="settings">
             <div class="field"><span class="caption">デバイス／接続</span><div class="device-options" aria-label="投影${slot}のデバイス"></div></div>
             <div class="compact-controls wireless-settings">
@@ -304,10 +311,35 @@
     catch (_) {}
 
     async function request(path, body = {}) {
-      const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '操作に失敗しました。');
-      return data;
+      pendingActions++;
+      try {
+        const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '操作に失敗しました。');
+        return data;
+      } finally { pendingActions--; }
+    }
+
+    function canRefreshPage() {
+      const now = Date.now();
+      return !document.hidden && !pendingActions && !connectionDialog.open
+        && !Object.values(experienceTimers.devices).some(timer => timer.sessionDeadline > now || timer.stage?.deadline > now)
+        && ![...document.querySelectorAll('[data-field="url"]')].some(input => input.value.trim());
+    }
+
+    async function checkPageVersion() {
+      if (checkingVersion || !canRefreshPage()) return;
+      checkingVersion = true;
+      try {
+        const response = await fetch('/api/version', {cache:'no-store'});
+        if (!response.ok) return;
+        const current = await response.json();
+        if (typeof current.version === 'string' && current.version === current.page_version
+            && current.version !== pageVersion && current.projection_running === false && canRefreshPage()) {
+          location.reload();
+        }
+      } catch (_) { /* The local server may still be restarting. */ }
+      finally { checkingVersion = false; }
     }
 
     function normalizedUrl(value) {
@@ -342,15 +374,14 @@
       });
     }
     async function appRequest(slot, path, body, app, closed = false) {
-      const target = targetFor(slot);
-      const identity = selectedPhysical[slot];
-      if (!identity) throw new Error('この枠のデバイスを選択してください。');
+      const binding = bindingFor(slot);
+      const identity = binding.physical_serial;
       if (appBusy.has(identity)) throw new Error('操作中です。');
       appBusy.add(identity);
       appRevisions.set(identity, (appRevisions.get(identity) || 0) + 1);
       renderAppBusy();
       try {
-        const result = await request(path, {...body, target});
+        const result = await request(path, {...body, ...binding});
         if (closed) experienceTimers.closed(identity, app);
         else experienceTimers.launched(identity, app);
         persistTimers();
@@ -369,7 +400,7 @@
           if (!stage || appBusy.has(identity) || !selectedTargets[slot]) return;
           const revision = appRevisions.get(identity) || 0;
           try {
-            const result = await request('/api/app-presence', {target:selectedTargets[slot], physical_serial:identity, app:stage.app});
+            const result = await request('/api/app-presence', {...bindingFor(slot), app:stage.app});
             if (result.present === false && result.physical_serial === identity && selectedPhysical[slot] === identity && experienceTimers.get(identity).stage === stage && !appBusy.has(identity) && (appRevisions.get(identity) || 0) === revision) {
               experienceTimers.closed(identity); persistTimers(); renderTimers();
             }
@@ -401,32 +432,45 @@
     function saveSelection(slot, device) {
       selectedTargets[slot] = device?.serial || '';
       selectedPhysical[slot] = device?.physical_serial || '';
+      if (!device) manualTransport.delete(slot);
       localStorage.setItem(`auraPublicTarget${slot}`, selectedTargets[slot]);
       localStorage.setItem(`auraPublicPhysical${slot}`, selectedPhysical[slot]);
       renderTimers();
     }
 
+    function reservedPhysical(slot) {
+      const stream = reportedStreams?.[slot];
+      return stream?.running || stream?.recovering ? stream.physical_serial : '';
+    }
+
     function assignDevices(devices) {
       const bySerial = new Map(devices.map(device => [device.serial, device]));
-      const claimed = new Set();
+      const claimed = new Map(slots.filter(reservedPhysical).map(slot => [reservedPhysical(slot), slot]));
+      const available = (identity, slot) => !claimed.has(identity) || claimed.get(identity) === slot;
       slots.forEach(slot => {
+        const identity = selectedPhysical[slot];
         let device = bySerial.get(selectedTargets[slot]);
-        if (!device && selectedPhysical[slot]) {
-          const same = devices.filter(item => item.physical_serial === selectedPhysical[slot]);
+        if (identity && device?.physical_serial !== identity) device = undefined;
+        if (!device && identity && (!reportedStreams || reservedPhysical(slot) === identity) && available(identity, slot)) {
+          claimed.set(identity, slot);
+          return;
+        }
+        if (!device && identity) {
+          const same = devices.filter(item => item.physical_serial === identity);
           device = same.find(item => item.transport === 'wireless') || same[0];
         }
-        if (!device || claimed.has(device.physical_serial)) saveSelection(slot, null);
-        else { saveSelection(slot, device); claimed.add(device.physical_serial); }
+        if (!device || !available(device.physical_serial, slot)) saveSelection(slot, null);
+        else { saveSelection(slot, device); claimed.set(device.physical_serial, slot); }
       });
       slots.forEach(slot => {
-        if (selectedTargets[slot]) return;
+        if (selectedTargets[slot] || reservedPhysical(slot)) return;
         const physicals = [...new Set(devices.map(device => device.physical_serial))];
         const physical = physicals.find(value => !claimed.has(value));
         if (!physical) return;
         const same = devices.filter(device => device.physical_serial === physical);
         const device = same.find(item => item.transport === 'wireless') || same[0];
         saveSelection(slot, device);
-        claimed.add(physical);
+        claimed.set(physical, slot);
       });
     }
 
@@ -434,7 +478,7 @@
       slots.forEach(slot => {
         const panel = document.querySelector(`[data-slot="${slot}"]`);
         const container = panel.querySelector('.device-options');
-        const usedElsewhere = new Set(slots.filter(other => other !== slot).map(other => selectedPhysical[other]).filter(Boolean));
+        const usedElsewhere = new Set(slots.filter(other => other !== slot).flatMap(other => [selectedPhysical[other], reservedPhysical(other)]).filter(Boolean));
         const none = document.createElement('button');
         none.type = 'button';
         none.className = `device-option${selectedTargets[slot] ? '' : ' selected'}`;
@@ -443,18 +487,21 @@
         const buttons = knownDevices.map(device => {
           const button = document.createElement('button');
           button.type = 'button';
-          button.className = `device-option${selectedTargets[slot] === device.serial ? ' selected' : ''}`;
+          button.className = `device-option${selectedTargets[slot] === device.serial && selectedPhysical[slot] === device.physical_serial ? ' selected' : ''}`;
           button.disabled = usedElsewhere.has(device.physical_serial);
-          const title = document.createElement('strong');
-          title.textContent = device.transport === 'usb' ? 'USB' : 'Wi-Fi';
-          const detail = document.createElement('small');
-          detail.textContent = `${device.physical_serial} · ${device.serial}`;
-          button.replaceChildren(title, detail);
-          button.addEventListener('click', () => { saveSelection(slot, device); renderDeviceOptions(); });
+          button.innerHTML = '<strong></strong><small></small>';
+          button.firstElementChild.textContent = device.transport === 'usb' ? 'USB' : 'Wi-Fi';
+          button.lastElementChild.textContent = `${device.physical_serial} · ${device.serial}`;
+          button.addEventListener('click', () => {
+            if (reportedStreams?.[slot]?.active_serial === device.serial) manualTransport.delete(slot);
+            else manualTransport.add(slot);
+            saveSelection(slot, device);
+            renderDeviceOptions();
+          });
           return button;
         });
         container.replaceChildren(none, ...buttons);
-        const isUsb = knownDevices.some(device => device.serial === selectedTargets[slot] && device.transport === 'usb');
+        const isUsb = knownDevices.some(device => device.serial === selectedTargets[slot] && device.physical_serial === selectedPhysical[slot] && device.transport === 'usb');
         panel.querySelector('.wireless-settings').hidden = isUsb;
         panel.querySelector('.wireless-note').hidden = isUsb;
         panel.querySelector('.usb-settings').hidden = !isUsb;
@@ -465,6 +512,7 @@
     async function updateDevices() {
       try {
         const response = await fetch('/api/devices');
+        if (!response.ok) throw new Error('device list unavailable');
         const data = await response.json();
         knownDevices = data.devices || [];
         assignDevices(knownDevices);
@@ -474,6 +522,7 @@
         connectionText.textContent = `接続デバイス：${count}台 / 3枠`;
         AuraI18n.localize(connectionText);
       } catch (_) {
+        knownDevices = [];
         connection.classList.remove('connected');
         connectionText.textContent = '制御サービス未接続';
         AuraI18n.localize(connectionText);
@@ -481,25 +530,48 @@
     }
 
     async function updateStatus() {
+      const revision = ++statusRequest;
       try {
         const response = await fetch('/api/status');
         const data = await response.json();
+        if (revision < appliedStatus || !data.streams) return;
+        appliedStatus = revision;
+        const previous = reportedStreams;
+        reportedStreams = data.streams;
         if (data.discovery) renderDiscovery(data.discovery);
         let pcAudioOwner = '';
-        const fresh = (data.verified_wireless || []).filter(item => !notifiedWireless.has(item.serial + '/' + item.address));
+        const busy = new Set(slots.map(reservedPhysical));
+        const fresh = (data.verified_wireless || []).filter(item => {
+          const key = item.serial + '/' + item.address;
+          if (busy.has(item.serial)) notifiedWireless.add(key);
+          return !notifiedWireless.has(key);
+        });
         if (fresh.length && !connectionDialog.open) {
           connectionDialog.querySelector('.details').textContent = fresh.map(item => `${item.serial} — ${item.address}`).join('\n');
           fresh.forEach(item => notifiedWireless.add(item.serial + '/' + item.address));
           connectionDialog.showModal();
         }
+        let selectionChanged = false;
         slots.forEach(slot => {
           const stream = data.streams[slot];
+          if (stream.running && stream.active_serial && stream.physical_serial &&
+              (previous?.[slot]?.active_serial !== stream.active_serial || previous?.[slot]?.recovering) &&
+              !manualTransport.has(slot) && (!selectedPhysical[slot] || selectedPhysical[slot] === stream.physical_serial)) {
+            saveSelection(slot, {serial:stream.active_serial, physical_serial:stream.physical_serial});
+            selectionChanged = true;
+          }
           const panel = document.querySelector(`[data-slot="${slot}"]`);
           const status = panel.querySelector('.status');
-          status.textContent = stream.running ? `${stream.active_connection === 'wireless' ? 'Wi-Fi' : 'USB'}実行中` : '停止中';
+          const label = stream.running ? `${stream.active_connection === 'wireless' ? 'Wi-Fi' : 'USB'}実行中` : stream.recovering ? '投影を再接続中' : '停止中';
+          if (status.dataset.label !== label) {
+            status.dataset.label = label;
+            status.textContent = label;
+          }
           status.classList.toggle('running', stream.running);
           if (stream.running && stream.audio !== 'no-audio') pcAudioOwner = slot;
         });
+        if (selectionChanged || slots.some(slot => reservedPhysical(slot) !==
+            ((previous?.[slot]?.running || previous?.[slot]?.recovering) ? previous[slot].physical_serial : ''))) renderDeviceOptions();
         slots.forEach(slot => {
           const panel = document.querySelector(`[data-slot="${slot}"]`);
           const select = panel.querySelector('[data-field="audio"]');
@@ -513,9 +585,13 @@
       AuraI18n.localize(document.querySelector('#panels'));
     }
 
-    function targetFor(slot) {
-      if (!selectedTargets[slot]) throw new Error('この枠のデバイスを選択してください。');
-      return selectedTargets[slot];
+    function bindingFor(slot) {
+      const target = selectedTargets[slot];
+      const physical_serial = selectedPhysical[slot];
+      if (!target || !physical_serial || !knownDevices.some(item => item.serial === target && item.physical_serial === physical_serial)) {
+        throw new Error('この枠のデバイスを選択してください。');
+      }
+      return {target, physical_serial};
     }
 
     function renderDiscovery(state) {
@@ -551,7 +627,7 @@
         } else if (button.classList.contains('start')) {
           setLog('起動中', `投影 ${slot}`);
           const result = await request('/api/start', {
-            slot, target: targetFor(slot),
+            slot, ...bindingFor(slot),
             language: AuraI18n.language,
             resolution: panel.querySelector('[data-field="resolution"]').value,
             frame_rate: panel.querySelector('[data-field="frameRate"]').value,
@@ -560,6 +636,7 @@
             record: panel.querySelector('[data-field="record"]').checked,
             mouse: panel.querySelector('[data-field="mouse"]').checked
           });
+          manualTransport.delete(slot);
           if (result.audio_adjusted) panel.querySelector('[data-field="audio"]').value = 'no-audio';
           setLog('投影開始', `${slot} / ${result.serial}${result.audio_adjusted ? ' / PC音声は別の投影で使用中' : ''}`);
         } else if (button.classList.contains('recordings')) {
@@ -570,7 +647,7 @@
           const value = button.dataset.value ?? panel.querySelector(`[data-tune-value="${action}"]`)?.value;
           const result = action.startsWith('gemini-xr-')
             ? await appRequest(slot, '/api/tune', {action, value}, 'gemini', action === 'gemini-xr-off')
-            : await request('/api/tune', {target:targetFor(slot), action, value});
+            : await request('/api/tune', {...bindingFor(slot), action, value});
           if (button.dataset.value !== undefined) panel.querySelectorAll(`[data-tune="${action}"]`).forEach(item => item.classList.toggle('selected', item.dataset.value === String(value)));
           setLog('OK', '');
         } else if (button.classList.contains('url-open')) {
@@ -593,7 +670,7 @@
         } else if (button.dataset.action) {
           const tracked = ['close-all', 'open-workset'].includes(button.dataset.action);
           if (tracked) await appRequest(slot, '/api/control', {action:button.dataset.action}, button.dataset.action === 'open-workset' ? 'youtube' : null, button.dataset.action === 'close-all');
-          else await request('/api/control', {target:targetFor(slot), action:button.dataset.action});
+          else await request('/api/control', {...bindingFor(slot), action:button.dataset.action});
           setLog('OK', '');
         }
         await updateStatus();
@@ -627,6 +704,10 @@
     renderTimers();
     updateDevices();
     updateStatus();
+    checkPageVersion();
+    window.addEventListener('focus', checkPageVersion);
+    document.addEventListener('visibilitychange', checkPageVersion);
+    setInterval(checkPageVersion, 15000);
     setInterval(updateDevices, 3000);
     setInterval(updateStatus, 2000);
     setInterval(checkAppPresence, 5000);

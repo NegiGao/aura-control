@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import atexit
+import ipaddress
 import json
 import os
 import re
@@ -23,6 +24,8 @@ SCRCPY_SERVER = Path(os.environ.get("AURA_SCRCPY_SERVER", "/opt/homebrew/share/s
 RECORDINGS = DATA_ROOT / "recordings"
 LOG_FILE = DATA_ROOT / "scrcpy.log"
 PORT = int(os.environ.get("AURA_CONTROL_PORT", "8775"))
+VERSION = (ROOT / "VERSION").read_text().strip()
+PAGE_ASSETS = {"/", "/index.html", "/ui_languages.js", "/i18n.js", "/experience_timers.js"}
 
 process_lock = threading.Lock()
 wireless_lock = threading.Lock()
@@ -32,10 +35,14 @@ discovery_lock = threading.Lock()
 discovery = {"automatic": False, "pending": False, "running": False, "generation": 0}
 preferred_wireless = None
 streams = {}
+recoveries = {}
+WIFI_RECOVERY_GRACE = 18
+WIFI_RECOVERY_STABLE = 20
 last_errors = {"1": "", "2": "", "3": ""}
 wireless_error = ""
 verified_wireless = {}
 wireless_bootstrap_attempts = set()
+wireless_retry_after = {}
 
 APPS = {
     "maps-xr": "com.google.android.apps.immersiveviewxr/.ImmersiveViewXrActivity",
@@ -56,9 +63,9 @@ DESTINATIONS = {"tokyo-tower": "東京タワー", "takeshiba": "東京ポート�
 GEMINI_PACKAGE = "com.google.android.googlequicksearchbox"
 
 
-def adb_devices():
+def adb_devices(timeout=5):
     result = subprocess.run(
-        [str(ADB), "devices", "-l"], capture_output=True, text=True, timeout=5
+        [str(ADB), "devices", "-l"], capture_output=True, text=True, timeout=timeout
     )
     devices = []
     for line in result.stdout.splitlines()[1:]:
@@ -106,10 +113,10 @@ def connection_state():
     return usb, wireless
 
 
-def device_wifi_ip(serial):
+def device_wifi_ip(serial, timeout=5):
     result = subprocess.run(
         [str(ADB), "-s", serial, "shell", "ip", "-4", "addr", "show", "wlan0"],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True, text=True, timeout=timeout,
     )
     match = re.search(r"\binet\s+(\d+(?:\.\d+){3})/", result.stdout)
     return match.group(1) if match else None
@@ -132,8 +139,121 @@ def confirm_wireless(target, expected):
     )
     if actual.returncode or actual.stdout.strip() != expected:
         return False
-    verified_wireless[target] = {"serial": expected, "address": target}
+    remember_wireless(target, expected)
     return True
+
+
+def remember_wireless(target, expected):
+    for address, known in list(verified_wireless.items()):
+        if address != target and known["serial"] == expected:
+            verified_wireless.pop(address, None)
+    verified_wireless[target] = {"serial": expected, "address": target}
+
+
+def advertised_wireless_address(expected, timeout=3):
+    """Recover only a known serial's legacy ADB advertisement, never TLS pairing."""
+    try:
+        result = subprocess.run([str(ADB), "mdns", "services"],
+                                capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 3 or parts[0] != f"adb-{expected}" or parts[1].rstrip(".") != "_adb._tcp":
+            continue
+        host, separator, port = parts[2].rpartition(":")
+        try:
+            if separator and 1 <= int(port) <= 65535 and ipaddress.ip_address(host).version == 4:
+                return parts[2]
+        except ValueError:
+            continue
+    return None
+
+
+def read_physical_serial(target, timeout=2):
+    try:
+        result = subprocess.run(
+            [str(ADB), "-s", target, "shell", "getprop", "ro.serialno"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
+def recovery_target(physical_serial, prefer_usb):
+    """Find an authorized transport for the same device, without restarting ADB."""
+    if not physical_serial:
+        return None
+    if not prefer_usb and not wireless_lock.acquire(blocking=False):
+        return None
+    deadline = time.monotonic() + 5
+
+    def timeout():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("ADB recovery", 5)
+        return min(2, remaining)
+
+    def matches(target):
+        return read_physical_serial(target, timeout=timeout()) == physical_serial
+
+    try:
+        with process_lock:
+            other_targets = {
+                state.get("serial") for state in streams.values()
+                if state.get("physical_serial") != physical_serial
+            }
+        devices = [device for device in adb_devices(timeout=timeout())
+                   if device["serial"] not in other_targets]
+        usb_targets = sorted(
+            (device["serial"] for device in devices if device["usb"]),
+            key=lambda serial: serial != physical_serial,
+        )
+        if prefer_usb:
+            return next((target for target in usb_targets if matches(target)), None)
+
+        connected = [device["serial"] for device in devices
+                     if not device["usb"] and ":" in device["serial"]]
+        known = [target for target, record in verified_wireless.items()
+                 if record["serial"] == physical_serial]
+        for target in sorted(connected, key=lambda serial: serial not in known):
+            if matches(target):
+                remember_wireless(target, physical_serial)
+                return target
+
+        usb = next((target for target in usb_targets if matches(target)), None)
+        try:
+            ip = device_wifi_ip(usb, timeout=timeout()) if usb else None
+        except (OSError, subprocess.TimeoutExpired):
+            ip = None
+        def candidates():
+            if ip:
+                yield f"{ip}:5555"
+            yield advertised_wireless_address(physical_serial, timeout=timeout())
+            yield from known
+
+        seen = set(connected) | other_targets
+        for target in candidates():
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            try:
+                subprocess.run([str(ADB), "connect", target],
+                               capture_output=True, text=True, timeout=timeout())
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if matches(target):
+                remember_wireless(target, physical_serial)
+                return target
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    finally:
+        if not prefer_usb:
+            wireless_lock.release()
+    return None
 
 
 def ensure_wireless(discover=True, cancelled=lambda: False):
@@ -142,38 +262,68 @@ def ensure_wireless(discover=True, cancelled=lambda: False):
         usb, wireless_devices = connection_state()
         usb = next((d["serial"] for d in adb_devices() if d.get("usb") and "Android_XR_Puck" in d.get("model", "")), None)
         if not usb or not discover:
-            # Only retry addresses with a previously verified physical identity.
+            connected = []
             known_targets = list(dict.fromkeys([preferred_wireless, *verified_wireless]))
-            for target in known_targets:
+            with process_lock:
+                active_targets = {
+                    state.get("serial"): state.get("physical_serial")
+                    for state in streams.values()
+                    if state.get("connection") == "wireless" and state["process"].poll() is None
+                }
+                recovering_devices = {ticket["physical_serial"] for ticket in recoveries.values()}
+            for target in dict.fromkeys([*known_targets, *wireless_devices]):
                 known = verified_wireless.get(target)
-                if not known:
+                expected = known["serial"] if known else None
+                if target in active_targets:
+                    # A healthy video transport needs no additional ADB probe.
+                    identity = active_targets[target]
+                    if identity and identity != target and expected in (None, identity):
+                        for address, record in list(verified_wireless.items()):
+                            if address != target and record["serial"] == identity:
+                                verified_wireless.pop(address, None)
+                        verified_wireless[target] = {"serial": identity, "address": target}
+                        connected.append(target)
                     continue
+                if target not in wireless_devices:
+                    continue
+                try:
+                    if expected is None:
+                        # An already authorized transport can survive a controller restart.
+                        identity = subprocess.run(
+                            [str(ADB), "-s", target, "shell", "getprop", "ro.serialno"],
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        expected = identity.stdout.strip() if identity.returncode == 0 else None
+                    if confirm_wireless(target, expected):
+                        connected.append(target)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+            # One due retry per tick, oldest first; a dead headset cannot monopolize ADB.
+            now = time.monotonic()
+            missing = [known for target, known in verified_wireless.items()
+                       if target not in connected and target not in active_targets
+                       and known["serial"] not in recovering_devices
+                       and wireless_retry_after.get(known["serial"], 0) <= now]
+            if missing and not cancelled():
+                known = min(missing, key=lambda item: wireless_retry_after.get(item["serial"], 0))
                 expected = known["serial"]
-                if not wireless_is_ready(target):
-                    subprocess.run(
-                        [str(ADB), "disconnect", target],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    subprocess.run(
-                        [str(ADB), "connect", target],
-                        capture_output=True, text=True, timeout=8,
-                    )
-                if confirm_wireless(target, expected):
-                    preferred_wireless = target
-                    wireless_error = ""
-                    return None, target
-                wireless_error = f"Wi-Fi接続に失敗しました：{target}"
-            candidates = [item for item in wireless_devices if item not in verified_wireless]
-            for target in candidates:
-                # Existing authorized ADB sessions survive a controller restart.
-                identity = subprocess.run(
-                    [str(ADB), "-s", target, "shell", "getprop", "ro.serialno"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if identity.returncode == 0 and confirm_wireless(target, identity.stdout.strip()):
-                    preferred_wireless = target
-                    wireless_error = ""
-                    return None, target
+                wireless_retry_after[expected] = now + 15
+                target = advertised_wireless_address(expected) or known["address"]
+                try:
+                    if not cancelled():
+                        subprocess.run([str(ADB), "connect", target],
+                                       capture_output=True, text=True, timeout=3)
+                        if confirm_wireless(target, expected):
+                            connected.append(target)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                if target not in connected:
+                    wireless_error = f"Wi-Fi接続に失敗しました：{target}"
+            if connected:
+                preferred_wireless = preferred_wireless if preferred_wireless in connected else connected[0]
+                wireless_error = ""
+                return None, preferred_wireless
             return None, None
 
         if cancelled():
@@ -285,8 +435,9 @@ def monitor_wireless():
 
 def cleanup_streams():
     for slot, state in list(streams.items()):
-        if state["process"].poll() is not None:
-            streams.pop(slot, None)
+        exit_code = state["process"].poll()
+        if exit_code is not None:
+            finish_scrcpy(slot, state, exit_code)
 
 
 def stop_scrcpy(slot):
@@ -294,10 +445,11 @@ def stop_scrcpy(slot):
     if slot not in {"1", "2", "3"}:
         raise ValueError("投影枠が正しくありません。")
     with process_lock:
-        cleanup_streams()
+        cancelled = recoveries.pop(slot, None) is not None
         state = streams.pop(slot, None)
-        if not state:
-            return False
+        last_errors[slot] = ""
+        if not state or state["process"].poll() is not None:
+            return cancelled
         process = state["process"]
         os.killpg(process.pid, signal.SIGTERM)
         try:
@@ -309,7 +461,9 @@ def stop_scrcpy(slot):
 
 
 def stop_all_scrcpy():
-    for slot in list(streams):
+    with process_lock:
+        slots = set(streams) | set(recoveries)
+    for slot in slots:
         try:
             stop_scrcpy(slot)
         except Exception:
@@ -646,7 +800,99 @@ def open_recordings():
     return str(RECORDINGS)
 
 
-def start_scrcpy(options):
+def spawn_scrcpy(state):
+    with state["log_path"].open("ab") as log:
+        state["log_offset"] = log.tell()
+        state["process"] = subprocess.Popen(
+            state["command"], cwd=ROOT, env=state["env"],
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    state["started_at"] = time.monotonic()
+
+
+def finish_scrcpy(slot, state, exit_code):
+    streams.pop(slot, None)
+    wireless = state.get("connection") == "wireless" and state.get("ready") and state.get("options")
+    if exit_code == 0 and not wireless:
+        last_errors[slot] = ""
+        return False
+    try:
+        with state["log_path"].open("rb") as log:
+            end = log.seek(0, os.SEEK_END)
+            log.seek(max(state["log_offset"], end - 4096))
+            tail = log.read(4096).decode(errors="replace").strip()
+    except (KeyError, OSError):
+        tail = ""
+    if wireless and exit_code >= 0 and (exit_code > 0 or "Device disconnected" in tail):
+        now = time.monotonic()
+        previous = state.get("recovery")
+        # A Wi-Fi retry that fails again within seconds must not reset the USB deadline.
+        if previous and now - state["started_at"] < WIFI_RECOVERY_STABLE:
+            recoveries[slot] = previous
+        else:
+            recoveries[slot] = {
+                "physical_serial": state["physical_serial"],
+                "options": state["options"], "usb_after": now + WIFI_RECOVERY_GRACE,
+                "next_attempt": now,
+            }
+    if exit_code == 0 and slot not in recoveries:
+        last_errors[slot] = ""
+        return False
+    last_errors[slot] = tail[-1200:] or f"scrcpy が終了しました（終了コード {exit_code}）。"
+    if not (
+        exit_code > 0 and state.get("connection") == "usb"
+        and state.get("audio") not in (None, "no-audio") and not state.get("record")
+        and "Could not open audio device: CoreAudio error (AudioQueueStart)" in tail
+    ):
+        return False
+    try:
+        if not any(item["usb"] and item["serial"] == state["serial"] for item in adb_devices()):
+            return False
+        # A failed Mac audio output must not tear down an otherwise usable USB display.
+        state["command"] = [arg for arg in state["command"] if not arg.startswith("--audio-")] + ["--no-audio"]
+        state["audio"] = "no-audio"
+        spawn_scrcpy(state)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    streams[slot] = state
+    last_errors[slot] = "Macの音声出力を開けなかったため、USB映像のみで再開しました。"
+    return True
+
+
+def projection_recovery_step():
+    with process_lock:
+        cleanup_streams()
+        pending = list(recoveries.items())
+    for slot, ticket in pending:
+        now = time.monotonic()
+        if monitor_stop.is_set() or now < ticket["next_attempt"]:
+            continue
+        with process_lock:
+            if recoveries.get(slot) is not ticket or slot in streams:
+                continue
+            usb_due = now >= ticket["usb_after"]
+            ticket["next_attempt"] = now + (10 if usb_due else 3)
+        for prefer_usb in ((True, False) if usb_due else (False,)):
+            try:
+                target = recovery_target(ticket["physical_serial"], prefer_usb=prefer_usb)
+                with process_lock:
+                    if recoveries.get(slot) is not ticket or slot in streams:
+                        break
+                if target:
+                    start_scrcpy({**ticket["options"], "slot": slot, "target": target}, recovery=ticket)
+                    break
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                # A vanished endpoint or failed encoder is retried on the next due tick.
+                continue
+
+
+def monitor_projection_recovery():
+    while not monitor_stop.is_set():
+        projection_recovery_step()
+        monitor_stop.wait(2)
+
+
+def start_scrcpy(options, *, recovery=None):
     slot = str(options.get("slot", ""))
     if slot not in {"1", "2", "3"}:
         raise ValueError("設定値が正しくありません。")
@@ -660,7 +906,6 @@ def start_scrcpy(options):
     if not serial:
         raise RuntimeError("接続可能なデバイスが見つかりません。")
     connection = "wireless" if ":" in serial else "usb"
-    display_id = internal_display_id(serial)
     settings = projection_settings(options, connection)
     resolution = settings["resolution"]
     audio = settings["audio"]
@@ -668,12 +913,43 @@ def start_scrcpy(options):
         [str(ADB), "-s", serial, "shell", "getprop", "ro.serialno"],
         capture_output=True, text=True, timeout=5,
     )
-    physical_serial = physical_result.stdout.strip() or serial
+    reported_serial = physical_result.stdout.strip() if physical_result.returncode == 0 else ""
+    expected = recovery["physical_serial"] if recovery is not None else options.get("physical_serial")
+    if expected is not None and reported_serial != expected:
+        raise RuntimeError("選択したデバイスのシリアル番号が一致しません。")
+    physical_serial = reported_serial or serial
+    display_id = internal_display_id(serial)
     projection_env = scrcpy_environment()
 
     with process_lock:
         cleanup_streams()
         current = streams.get(slot)
+        if recovery is not None and (recoveries.get(slot) is not recovery or current or monitor_stop.is_set()):
+            raise RuntimeError("投影の再接続はキャンセルされました。")
+        if any(
+            state["physical_serial"] == physical_serial
+            for other_slot, state in streams.items() if other_slot != slot
+        ):
+            raise RuntimeError("このデバイスは別の投影枠で使用中です。")
+
+        audio_adjusted = False
+        if audio != "no-audio" and any(
+            state["audio"] != "no-audio"
+            for other_slot, state in streams.items() if other_slot != slot
+        ):
+            audio = "no-audio"
+            audio_adjusted = True
+
+        config = (serial, physical_serial, display_id, tuple(sorted(settings.items())), audio,
+                  projection_label, bool(options.get("always_top", False)),
+                  bool(options.get("mouse", False)), bool(options.get("record", False)))
+        if current and current.get("config") == config:
+            # Repeated Start must not disconnect an unchanged live stream or recording.
+            return serial, connection, None, current["audio"], audio_adjusted
+        if recovery is None:
+            for other_slot, ticket in list(recoveries.items()):
+                if other_slot == slot or ticket["physical_serial"] == physical_serial:
+                    recoveries.pop(other_slot, None)
         if current:
             process = current["process"]
             os.killpg(process.pid, signal.SIGTERM)
@@ -683,19 +959,6 @@ def start_scrcpy(options):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=2)
             streams.pop(slot, None)
-
-        if any(
-            state["physical_serial"] == physical_serial
-            for other_slot, state in streams.items() if other_slot != slot
-        ):
-            raise RuntimeError("このデバイスは別の投影枠で使用中です。")
-
-        audio_adjusted = False
-        if audio != "no-audio" and any(
-            state["audio"] != "no-audio" for state in streams.values()
-        ):
-            audio = "no-audio"
-            audio_adjusted = True
 
         window_width, window_height = quarter_screen_size()
         command = [
@@ -733,39 +996,26 @@ def start_scrcpy(options):
                 f"--audio-bit-rate={settings['audio_bit_rate']}",
             ]
 
-        log_path = DATA_ROOT / f"scrcpy-{slot}.log"
-        log = log_path.open("ab")
-        try:
-            process = subprocess.Popen(
-                command,
-            cwd=ROOT,
-                env=projection_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            streams[slot] = {
-                "process": process,
-                "serial": serial,
-                "physical_serial": physical_serial,
-                "connection": connection,
-                "audio": audio,
-                "resolution": resolution,
-                "frame_rate": settings["frame_rate"],
-            }
-        finally:
-            log.close()
-
-        try:
-            exit_code = process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            last_errors[slot] = ""
-            return serial, connection, command, audio, audio_adjusted
-
-        streams.pop(slot, None)
-        tail = log_path.read_text(errors="replace")[-1200:] if log_path.exists() else ""
-        last_errors[slot] = tail.strip() or f"scrcpy が終了しました（終了コード {exit_code}）。"
-        raise RuntimeError(last_errors[slot])
+        state = {
+            "serial": serial, "physical_serial": physical_serial, "connection": connection,
+            "audio": audio, "resolution": resolution, "frame_rate": settings["frame_rate"],
+            "config": config, "record": bool(options.get("record", False)),
+            "options": dict(options) if reported_serial else None, "recovery": recovery,
+            "command": command, "env": projection_env, "log_path": DATA_ROOT / f"scrcpy-{slot}.log",
+        }
+        spawn_scrcpy(state)
+        streams[slot] = state
+        last_errors[slot] = ""
+        while True:
+            try:
+                exit_code = state["process"].wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                state["ready"] = True
+                if recovery is not None:
+                    recoveries.pop(slot, None)
+                return serial, connection, state["command"], state["audio"], audio_adjusted
+            if not finish_scrcpy(slot, state, exit_code):
+                raise RuntimeError(last_errors[slot] or "scrcpy が終了しました（終了コード 0）。")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -774,6 +1024,17 @@ class Handler(SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
+
+    def end_headers(self):
+        if urlsplit(self.path).path in PAGE_ASSETS or self.path == "/api/version":
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+    def send_head(self):
+        if urlsplit(self.path).path in PAGE_ASSETS:
+            # A newly installed build may carry older file timestamps than a cached copy.
+            del self.headers["If-Modified-Since"]
+        return super().send_head()
 
     def send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -784,6 +1045,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/api/version":
+            with process_lock:
+                projection_running = bool(streams or recoveries)
+            self.send_json(200, {
+                "version": VERSION,
+                "page_version": (ROOT / "VERSION").read_text().strip(),
+                "projection_running": projection_running,
+            })
+            return
         if self.path == "/api/devices":
             try:
                 self.send_json(200, {"devices": device_choices()})
@@ -794,6 +1064,21 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 with process_lock:
                     cleanup_streams()
+                    projection_status = {}
+                    for slot in ("1", "2", "3"):
+                        stream = streams.get(slot, {})
+                        pending = recoveries.get(slot, {})
+                        projection_status[slot] = {
+                            "running": bool(stream),
+                            "recovering": bool(pending),
+                            "physical_serial": stream.get("physical_serial") or pending.get("physical_serial"),
+                            "active_serial": stream.get("serial"),
+                            "active_connection": stream.get("connection"),
+                            "audio": stream.get("audio"),
+                            "resolution": stream.get("resolution"),
+                            "frame_rate": stream.get("frame_rate"),
+                            "error": last_errors[slot],
+                        }
                 usb, wireless_devices = connection_state()
                 wireless = (
                     preferred_wireless
@@ -806,18 +1091,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "usb_serial": usb,
                     "wireless_connected": bool(wireless),
                     "wireless_serial": wireless,
-                    "streams": {
-                        slot: {
-                            "running": slot in streams,
-                            "active_serial": streams.get(slot, {}).get("serial"),
-                            "active_connection": streams.get(slot, {}).get("connection"),
-                            "audio": streams.get(slot, {}).get("audio"),
-                            "resolution": streams.get(slot, {}).get("resolution"),
-                            "frame_rate": streams.get(slot, {}).get("frame_rate"),
-                            "error": last_errors[slot],
-                        }
-                        for slot in ("1", "2", "3")
-                    },
+                    "streams": projection_status,
                     "wireless_error": wireless_error,
                     "verified_wireless": list(verified_wireless.values()),
                     "discovery": discovery_status(),
@@ -833,6 +1107,12 @@ class Handler(SimpleHTTPRequestHandler):
             if length > 4096:
                 raise ValueError("リクエストが大きすぎます。")
             data = json.loads(self.rfile.read(length) or b"{}")
+            if self.path in {"/api/launch", "/api/destination", "/api/tune", "/api/open-url", "/api/control"} and "physical_serial" in data:
+                target = resolve_target(str(data.get("target", "")))
+                expected = data["physical_serial"]
+                if not isinstance(expected, str) or not expected or read_physical_serial(target) != expected:
+                    raise RuntimeError("選択したデバイスのシリアル番号が一致しません。")
+                data["target"] = target
 
             if self.path == "/api/start":
                 serial, connection, command, audio, audio_adjusted = start_scrcpy(data)
@@ -880,6 +1160,7 @@ def main():
     atexit.register(stop_all_scrcpy)
     if os.environ.get("AURA_CONTROL_AUTO_WIFI", "1") != "0":
         threading.Thread(target=monitor_wireless, daemon=True).start()
+    threading.Thread(target=monitor_projection_recovery, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"投影コントロール: http://127.0.0.1:{PORT}")
     try:
